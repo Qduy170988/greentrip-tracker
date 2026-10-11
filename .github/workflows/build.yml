@@ -36,7 +36,14 @@ jobs:
           cp "$MAIN_PATH" app/src/main/java/com/greentrip/tracker/MainActivity.kt
         fi
 
-        # 3. Tao settings.gradle.kts goc
+        # 3. Tao gradle.properties bat tinh nang AndroidX
+        cat << 'EOF' > gradle.properties
+        android.useAndroidX=true
+        android.nonTransitiveRClass=true
+        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+        EOF
+
+        # 4. Tao settings.gradle.kts goc
         cat << 'EOF' > settings.gradle.kts
         pluginManagement {
             repositories {
@@ -56,7 +63,7 @@ jobs:
         include(":app")
         EOF
 
-        # 4. Tao build.gradle.kts goc
+        # 5. Tao build.gradle.kts goc
         cat << 'EOF' > build.gradle.kts
         plugins {
             id("com.android.application") version "8.4.2" apply false
@@ -65,7 +72,7 @@ jobs:
         }
         EOF
 
-        # 5. Tao app/build.gradle.kts
+        # 6. Tao app/build.gradle.kts
         cat << 'EOF' > app/build.gradle.kts
         plugins {
             id("com.android.application")
@@ -121,7 +128,7 @@ jobs:
         }
         EOF
 
-        # 6. Tao AndroidManifest.xml
+        # 7. Tao AndroidManifest.xml
         cat << 'EOF' > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
