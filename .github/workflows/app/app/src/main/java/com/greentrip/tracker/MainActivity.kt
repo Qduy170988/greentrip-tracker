@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
@@ -48,14 +49,11 @@ import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
 
-// ==========================================
-// BẢNG MÀU DARK THEME CHUẨN XANH SM (DEMO)
-// ==========================================
+// BẢNG MÀU CHUẨN XANH SM (DARK THEME)
 val DarkBg = Color(0xFF101315)
 val DarkCardBg = Color(0xFF1A1D20)
 val DarkCardBorder = Color(0xFF262B2F)
 val DarkInputBg = Color(0xFF131618)
-val EmeraldHeader = Color(0xFF00382E)
 val EmeraldAccent = Color(0xFF00B074)
 val NeonGreen = Color(0xFF00E676)
 val NeonCyan = Color(0xFF00E5FF)
@@ -65,7 +63,6 @@ val WarningRedBorder = Color(0xFF4A1F24)
 val TextWhite = Color(0xFFFFFFFF)
 val TextGray = Color(0xFF8E959B)
 
-// 1. DATA DATABASE
 @Entity(tableName = "trips")
 data class TripEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -118,7 +115,7 @@ abstract class AppDatabase : RoomDatabase() {
     }
 }
 
-// 2. OCR BÓC TÁCH VÀ TỰ XÓA RAM
+// BỘ BÓC TÁCH NÂNG CẤP (XỬ LÝ MÉT & LỌC NHIỄU BIỂN BÁO)
 data class ParsedTrip(val distanceKm: Double, val durationMinutes: Double, val source: String)
 
 class OcrProcessor(private val context: Context) {
@@ -132,14 +129,35 @@ class OcrProcessor(private val context: Context) {
             val visionText = recognizer.process(InputImage.fromBitmap(currentBitmap, 0)).await()
             val text = visionText.text
 
-            val distMatch = Regex("""(\d+([.,]\d+)?)\s*km(?!/h)""", RegexOption.IGNORE_CASE).find(text)
-            val distance = distMatch?.groupValues?.get(1)?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
+            var distance = 0.0
 
+            // 1. Tìm km trước (loại trừ km/h)
+            val kmMatch = Regex("""(?i)(\d+([.,]\d+)?)\s*km(?!/h)""").find(text)
+            if (kmMatch != null) {
+                distance = kmMatch.groupValues[1].replace(",", ".").toDoubleOrNull() ?: 0.0
+            } else {
+                // 2. Nếu không có km, tìm đơn vị mét (m) và chia cho 1000
+                val mMatch = Regex("""(?i)(\d+)\s*m\b(?!/h|in)""").find(text)
+                if (mMatch != null) {
+                    val meters = mMatch.groupValues[1].toDoubleOrNull() ?: 0.0
+                    distance = meters / 1000.0
+                }
+            }
+
+            // 3. Xử lý thời gian (Bỏ qua "chậm hơn X phút", không bắt chữ 'h' đơn lẻ để tránh AH17)
             var totalMin = 0.0
-            Regex("""(\d+)\s*(?:giờ|h)""", RegexOption.IGNORE_CASE).find(text)?.let {
+
+            // Chỉ bắt chữ "giờ" rõ ràng (ví dụ: 1 giờ 10 phút)
+            Regex("""(?i)(\d+)\s*giờ""").find(text)?.let {
                 totalMin += (it.groupValues[1].toDoubleOrNull() ?: 0.0) * 60
             }
-            Regex("""(\d+([.,]\d+)?)\s*(?:phút|ph|min)""", RegexOption.IGNORE_CASE).find(text)?.let {
+
+            // Lấy số phút (loại bỏ các dòng chứa 'chậm hơn' hoặc 'nhanh hơn')
+            val filteredLines = text.lines().filterNot { 
+                it.contains("chậm hơn", ignoreCase = true) || it.contains("nhanh hơn", ignoreCase = true) 
+            }.joinToString("\n")
+
+            Regex("""(?i)(\d+([.,]\d+)?)\s*(?:phút|ph)""").find(filteredLines)?.let {
                 totalMin += it.groupValues[1].replace(",", ".").toDoubleOrNull() ?: 0.0
             }
 
@@ -158,7 +176,6 @@ class OcrProcessor(private val context: Context) {
     }
 }
 
-// 3. VIEWMODEL
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dao = AppDatabase.getInstance(application).tripDao()
     private val ocrProcessor = OcrProcessor(application)
@@ -203,7 +220,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTrip(id: Long) = viewModelScope.launch { dao.deleteTrip(id) }
 }
 
-// 4. MAIN ACTIVITY & GIAO DIỆN CHUẨN DARK THEME
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -219,10 +235,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun DarkThemeAppScaffold(vm: MainViewModel = viewModel()) {
-    var selectedTab by remember { mutableStateOf(0) } // 0: Hôm nay, 1: Theo ngày & Doanh thu
+    var selectedTab by remember { mutableStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize().background(DarkBg)) {
-        // HEADER GRADIENT XANH ĐEN SANG TRỌNG
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -253,31 +268,18 @@ fun DarkThemeAppScaffold(vm: MainViewModel = viewModel()) {
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("GreenTrip Tracker", color = TextWhite, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = Color(0xFF004D40)
-                                ) {
-                                    Text(
-                                        "XANH SM",
-                                        color = EmeraldAccent,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
+                                Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF004D40)) {
+                                    Text("XANH SM", color = EmeraldAccent, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                 }
                             }
-                            Text(
-                                "Ngày: ${vm.todayDate}",
-                                color = TextGray,
-                                fontSize = 12.sp
-                            )
+                            Text("Ngày: ${vm.todayDate}", color = TextGray, fontSize = 12.sp)
                         }
                     }
                 }
 
                 Spacer(Modifier.height(14.dp))
 
-                // THANH PILL TAB ĐẶC TRƯNG CỦA BẢN DEMO
+                // THANH TAB CHỐNG RỚT DÒNG
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -295,48 +297,30 @@ fun DarkThemeAppScaffold(vm: MainViewModel = viewModel()) {
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            "Hôm nay",
-                            color = if (selectedTab == 0) TextWhite else TextGray,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+                        Text("Hôm nay", color = if (selectedTab == 0) TextWhite else TextGray, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
                     }
 
                     Box(
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.3f)
                             .clip(RoundedCornerShape(20.dp))
                             .background(if (selectedTab == 1) EmeraldAccent else Color.Transparent)
                             .clickable { selectedTab = 1 }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            "Theo ngày & Doanh thu",
-                            color = if (selectedTab == 1) TextWhite else TextGray,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
+                        Text("Theo ngày & Doanh thu", color = if (selectedTab == 1) TextWhite else TextGray, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
                     }
                 }
             }
         }
 
-        // PHẦN THÂN NỘI DUNG THEO TAB
         Box(modifier = Modifier.weight(1f)) {
-            if (selectedTab == 0) {
-                TodayDarkScreen(vm)
-            } else {
-                HistoryDarkScreen(vm)
-            }
+            if (selectedTab == 0) TodayDarkScreen(vm) else HistoryDarkScreen(vm)
         }
     }
 }
 
-// ==========================================
-// TAB 1: CA CHẠY HÔM NAY (DARK UI)
-// ==========================================
 @Composable
 fun TodayDarkScreen(vm: MainViewModel) {
     val trips by vm.currentTrips.collectAsState()
@@ -369,7 +353,6 @@ fun TodayDarkScreen(vm: MainViewModel) {
     ) {
         item { Spacer(Modifier.height(4.dp)) }
 
-        // CARD 1: ĐỒNG HỒ ODO XE (KM)
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -388,30 +371,19 @@ fun TodayDarkScreen(vm: MainViewModel) {
                             }
                             Text("Đồng hồ ODO xe (km)", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         }
-                        Text("Lăn bánh thực tế: ${String.format("%.1f", actualDist)} km", color = TextGray, fontSize = 12.sp)
+                        Text("Lăn bánh: ${String.format("%.1f", actualDist)} km", color = TextGray, fontSize = 12.sp)
                     }
 
                     Spacer(Modifier.height(14.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DarkOdoBox(
-                            label = "ODO Đầu ca",
-                            value = startInput,
-                            onValueChange = { startInput = it; vm.updateShift(vm.todayDate, it.toDoubleOrNull(), null, null) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        DarkOdoBox(
-                            label = "ODO Cuối ca",
-                            value = endInput,
-                            onValueChange = { endInput = it; vm.updateShift(vm.todayDate, null, it.toDoubleOrNull(), null) },
-                            modifier = Modifier.weight(1f)
-                        )
+                        DarkOdoBox("ODO Đầu ca", startInput, { startInput = it; vm.updateShift(vm.todayDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
+                        DarkOdoBox("ODO Cuối ca", endInput, { endInput = it; vm.updateShift(vm.todayDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
                     }
                 }
             }
         }
 
-        // CARD 2: BẢNG HIỆU QUẢ CA CHẠY (CHUẨN DEMO)
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -435,61 +407,48 @@ fun TodayDarkScreen(vm: MainViewModel) {
 
                     Spacer(Modifier.height(14.dp))
 
-                    // LƯỚI 2x2 CÁC Ô CHỈ SỐ GỌN GÀNG
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DarkStatBox(label = "Thời gian có khách", value = "${String.format("%.1f", totalOrderMin)}", unit = "phút", color = TextWhite, modifier = Modifier.weight(1f))
-                        DarkStatBox(label = "Km có đơn chở", value = "${String.format("%.1f", totalOrderDist)}", unit = "km", color = NeonCyan, modifier = Modifier.weight(1f))
+                        DarkStatBox("Thời gian có khách", String.format("%.1f", totalOrderMin), "phút", TextWhite, Modifier.weight(1f))
+                        DarkStatBox("Km có đơn chở", String.format("%.1f", totalOrderDist), "km", NeonCyan, Modifier.weight(1f))
                     }
                     Spacer(Modifier.height(10.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DarkStatBox(label = "Km ODO thực tế", value = "${String.format("%.1f", actualDist)}", unit = "km", color = TextWhite, modifier = Modifier.weight(1f))
-                        DarkStatBox(label = "Tỷ lệ đón khách", value = "$pickupRate", unit = "%", color = NeonGreen, modifier = Modifier.weight(1f))
+                        DarkStatBox("Km ODO thực tế", String.format("%.1f", actualDist), "km", TextWhite, Modifier.weight(1f))
+                        DarkStatBox("Tỷ lệ đón khách", "$pickupRate", "%", NeonGreen, Modifier.weight(1f))
                     }
 
                     Spacer(Modifier.height(14.dp))
 
-                    // BANNER ĐỎ ĐÔ KM CHẠY RỖNG VỚI ICON XE MÁY (CHUẨN DEMO)
+                    // THẺ KM CHẠY RỖNG CHỐNG TRÀN VÀ GÃY CHỮ
                     Card(
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = WarningRedBg),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, WarningRedBorder, RoundedCornerShape(12.dp))
+                        modifier = Modifier.fillMaxWidth().border(1.dp, WarningRedBorder, RoundedCornerShape(12.dp))
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
                                 Text("🛵", fontSize = 24.sp)
                                 Column {
-                                    Text("Km chạy rỗng (không khách)", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("ODO lăn bánh - Tổng km đơn nhận", color = TextGray, fontSize = 11.sp)
+                                    Text("Km chạy rỗng", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Không chở khách", color = TextGray, fontSize = 11.sp)
                                 }
                             }
                             Column(horizontalAlignment = Alignment.End) {
-                                Row(verticalAlignment = Alignment.Bottom) {
-                                    Text(
-                                        text = "${String.format("%.1f", emptyDist)}",
-                                        fontSize = 22.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = if (emptyDist > 15) DangerRed else NeonGreen
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("km", color = TextGray, fontSize = 13.sp, modifier = Modifier.padding(bottom = 2.dp))
-                                }
+                                Text(
+                                    text = "${String.format("%.1f", emptyDist)} km",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = if (emptyDist > 15) DangerRed else NeonGreen,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
                                 if (emptyDist > 15) {
                                     Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF4A1E24)) {
-                                        Text(
-                                            "Chạy rỗng nhiều!",
-                                            color = DangerRed,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
+                                        Text("Chạy rỗng nhiều!", color = DangerRed, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                     }
                                 }
                             }
@@ -499,13 +458,10 @@ fun TodayDarkScreen(vm: MainViewModel) {
             }
         }
 
-        // NÚT CHỌN ẢNH ĐỂ QUÉT (MÀU XANH NGỌC PHÁT SÁNG)
         item {
             Button(
                 onClick = { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
+                modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldAccent),
                 elevation = ButtonDefaults.buttonElevation(4.dp),
@@ -522,11 +478,7 @@ fun TodayDarkScreen(vm: MainViewModel) {
         }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Danh sách đơn đã quét", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Text("${trips.size} đơn", color = TextGray, fontSize = 12.sp)
             }
@@ -540,9 +492,6 @@ fun TodayDarkScreen(vm: MainViewModel) {
     }
 }
 
-// ==========================================
-// TAB 2: THEO NGÀY & DOANH THU & ĐƠN GIÁ
-// ==========================================
 @Composable
 fun HistoryDarkScreen(vm: MainViewModel) {
     val selectedDate by vm.selectedDate.collectAsState()
@@ -580,7 +529,6 @@ fun HistoryDarkScreen(vm: MainViewModel) {
     ) {
         item { Spacer(Modifier.height(4.dp)) }
 
-        // CHỌN NGÀY
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -616,7 +564,6 @@ fun HistoryDarkScreen(vm: MainViewModel) {
             }
         }
 
-        // NHẬP DOANH THU & ODO NGÀY ĐÓ
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -647,24 +594,13 @@ fun HistoryDarkScreen(vm: MainViewModel) {
                     Spacer(Modifier.height(12.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DarkOdoBox(
-                            label = "ODO Đầu ca",
-                            value = startInput,
-                            onValueChange = { startInput = it; vm.updateShift(selectedDate, it.toDoubleOrNull(), null, null) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        DarkOdoBox(
-                            label = "ODO Cuối ca",
-                            value = endInput,
-                            onValueChange = { endInput = it; vm.updateShift(selectedDate, null, it.toDoubleOrNull(), null) },
-                            modifier = Modifier.weight(1f)
-                        )
+                        DarkOdoBox("ODO Đầu", startInput, { startInput = it; vm.updateShift(selectedDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
+                        DarkOdoBox("ODO Cuối", endInput, { endInput = it; vm.updateShift(selectedDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
                     }
                 }
             }
         }
 
-        // THẺ TỔNG KẾT HIỆU QUẢ DOANH THU TRÊN KM
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -680,12 +616,7 @@ fun HistoryDarkScreen(vm: MainViewModel) {
                             Column(Modifier.padding(12.dp)) {
                                 Text("Đơn giá / Km khách", color = TextGray, fontSize = 11.sp)
                                 Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = "${formatter.format(pricePerOrderKm.toLong())} đ",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = NeonGreen
-                                )
+                                Text("${formatter.format(pricePerOrderKm.toLong())} đ", fontSize = 19.sp, fontWeight = FontWeight.Black, color = NeonGreen)
                                 Text("Doanh số ÷ Km khách", color = Color(0xFF6E857F), fontSize = 9.sp)
                             }
                         }
@@ -694,12 +625,7 @@ fun HistoryDarkScreen(vm: MainViewModel) {
                             Column(Modifier.padding(12.dp)) {
                                 Text("Đơn giá / Km lăn bánh", color = TextGray, fontSize = 11.sp)
                                 Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = "${formatter.format(pricePerActualKm.toLong())} đ",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = Color(0xFFFFD54F)
-                                )
+                                Text("${formatter.format(pricePerActualKm.toLong())} đ", fontSize = 19.sp, fontWeight = FontWeight.Black, color = Color(0xFFFFD54F))
                                 Text("Doanh số ÷ Tổng ODO", color = Color(0xFF6E857F), fontSize = 9.sp)
                             }
                         }
@@ -733,10 +659,6 @@ fun HistoryDarkScreen(vm: MainViewModel) {
         item { Spacer(Modifier.height(16.dp)) }
     }
 }
-
-// ==========================================
-// THÀNH PHẦN CON GIAO DIỆN DARK UI
-// ==========================================
 
 @Composable
 fun DarkOdoBox(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -778,10 +700,10 @@ fun DarkStatBox(label: String, value: String, unit: String, color: Color, modifi
         modifier = modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(12.dp))
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text(label, color = TextGray, fontSize = 12.sp)
+            Text(label, color = TextGray, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(value, fontSize = 20.sp, fontWeight = FontWeight.Black, color = color)
+                Text(value, fontSize = 19.sp, fontWeight = FontWeight.Black, color = color)
                 Spacer(Modifier.width(4.dp))
                 Text(unit, color = TextGray, fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
             }
