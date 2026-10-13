@@ -25,10 +25,11 @@ jobs:
         gradle-version: 8.6
         cache-disabled: true
 
-    - name: Auto Setup Full Project Structure
+    - name: Auto Setup Full Project Structure & Icon
       run: |
-        # 1. Tao cac thu muc chuan
+        # 1. Tao cac thu muc ma nguon va thu muc chua Icon
         mkdir -p app/src/main/java/com/greentrip/tracker
+        mkdir -p app/src/main/res/drawable
 
         # 2. Tu dong tim MainActivity.kt va chuyen vao dung vi tri
         MAIN_PATH=$(find . -name "MainActivity.kt" | head -n 1)
@@ -36,14 +37,37 @@ jobs:
           cp "$MAIN_PATH" app/src/main/java/com/greentrip/tracker/MainActivity.kt
         fi
 
-        # 3. Tao gradle.properties bat tinh nang AndroidX
+        # 3. Tao Icon ung dung Vector Logo Xanh SM (Tia set vang tren nen xanh)
+        cat << 'EOF' > app/src/main/res/drawable/ic_app_icon.xml
+        <vector xmlns:android="http://schemas.android.com/apk/res/android"
+            android:width="108dp"
+            android:height="108dp"
+            android:viewportWidth="108"
+            android:viewportHeight="108">
+            <!-- Nen hinh tron mau Xanh Ngoc Xanh SM -->
+            <path
+                android:fillColor="#00897B"
+                android:pathData="M54,4 C26.39,4 4,26.39 4,54 C4,81.61 26.39,104 54,104 C81.61,104 104,81.61 104,54 C104,26.39 81.61,4 54,4 Z"/>
+            <!-- Vong vien sang mau -->
+            <path
+                android:strokeColor="#00E676"
+                android:strokeWidth="2.5"
+                android:pathData="M54,10 C29.7,10 10,29.7 10,54 C10,78.3 29.7,98 54,98 C78.3,98 98,78.3 98,54 C98,29.7 78.3,10 54,10 Z"/>
+            <!-- Bieu tuong Tia Set Vang -->
+            <path
+                android:fillColor="#FFD600"
+                android:pathData="M58,26 L38,54 L52,54 L46,82 L68,50 L54,50 Z"/>
+        </vector>
+        EOF
+
+        # 4. Tao gradle.properties
         cat << 'EOF' > gradle.properties
         android.useAndroidX=true
         android.nonTransitiveRClass=true
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
         EOF
 
-        # 4. Tao settings.gradle.kts goc
+        # 5. Tao settings.gradle.kts
         cat << 'EOF' > settings.gradle.kts
         pluginManagement {
             repositories {
@@ -63,7 +87,7 @@ jobs:
         include(":app")
         EOF
 
-        # 5. Tao build.gradle.kts goc
+        # 6. Tao build.gradle.kts goc
         cat << 'EOF' > build.gradle.kts
         plugins {
             id("com.android.application") version "8.4.2" apply false
@@ -72,7 +96,7 @@ jobs:
         }
         EOF
 
-        # 6. Tao app/build.gradle.kts
+        # 7. Tao app/build.gradle.kts
         cat << 'EOF' > app/build.gradle.kts
         plugins {
             id("com.android.application")
@@ -128,13 +152,14 @@ jobs:
         }
         EOF
 
-        # 7. Tao AndroidManifest.xml
+        # 8. Tao AndroidManifest.xml (Gan bieu tuong ic_app_icon)
         cat << 'EOF' > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <application
                 android:allowBackup="true"
-                android:icon="@android:drawable/sym_def_app_icon"
+                android:icon="@drawable/ic_app_icon"
+                android:roundIcon="@drawable/ic_app_icon"
                 android:label="GreenTrip Tracker"
                 android:supportsRtl="true"
                 android:theme="@android:style/Theme.Material.Light.NoActionBar">
