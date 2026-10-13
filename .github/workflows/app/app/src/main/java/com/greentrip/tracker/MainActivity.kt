@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,6 +42,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -50,7 +52,9 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
 
+// ==========================================
 // BẢNG MÀU DARK THEME CHUẨN XANH SM
+// ==========================================
 val DarkBg = Color(0xFF101315)
 val DarkCardBg = Color(0xFF1A1D20)
 val DarkCardBorder = Color(0xFF262B2F)
@@ -237,7 +241,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDate(date: String) { selectedDate.value = date }
 
-    // PHÁT HIỆN ĐƠN TRÙNG LẶP KHI QUÉT ẢNH
     fun processImages(uris: List<Uri>, forDate: String) {
         viewModelScope.launch {
             isScanning = true
@@ -249,11 +252,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val duplicateList = mutableListOf<TripEntity>()
 
             for (p in parsedList) {
-                // Kiểm tra trùng với dữ liệu đã lưu trong máy
                 val isDupWithExisting = currentExisting.any {
                     abs(it.distanceKm - p.distanceKm) < 0.05 && abs(it.durationMinutes - p.durationMinutes) < 0.2
                 }
-                // Kiểm tra trùng ngay trong chính đợt ảnh vừa chọn
                 val isDupWithUnique = uniqueList.any {
                     abs(it.distanceKm - p.distanceKm) < 0.05 && abs(it.durationMinutes - p.durationMinutes) < 0.2
                 }
@@ -351,25 +352,124 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-// 4. MAIN ACTIVITY & UI
+// 4. MAIN ACTIVITY VỚI MÀN HÌNH LOADING
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize(), color = DarkBg) {
-                    DarkThemeAppScaffold()
+                    var isLoading by remember { mutableStateOf(true) }
+
+                    LaunchedEffect(Unit) {
+                        delay(1500)
+                        isLoading = false
+                    }
+
+                    if (isLoading) {
+                        AppLoadingScreen()
+                    } else {
+                        DarkThemeAppScaffold()
+                    }
                 }
             }
         }
     }
 }
 
+// GIAO DIỆN MÀN HÌNH LOADING (SPLASH SCREEN)
+@Composable
+fun AppLoadingScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color(0xFF00382E), Color(0xFF0A1815), DarkBg)
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(90.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF142B22))
+                    .border(2.dp, EmeraldAccent, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⚡", fontSize = 46.sp)
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "GreenTrip Tracker",
+                    color = TextWhite,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 24.sp
+                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFF004D40)
+                ) {
+                    Text(
+                        text = "XANH SM",
+                        color = EmeraldAccent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Hệ thống quản lý chuyến đi & ODO",
+                color = TextGray,
+                fontSize = 13.sp
+            )
+
+            Spacer(Modifier.height(36.dp))
+
+            CircularProgressIndicator(
+                color = EmeraldAccent,
+                strokeWidth = 3.dp,
+                modifier = Modifier.size(28.dp)
+            )
+
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "Đang đồng bộ dữ liệu ca chạy...",
+                color = Color(0xFF78909C),
+                fontSize = 12.sp
+            )
+        }
+
+        Text(
+            text = "Phiên bản 1.0 • Dành cho Tài xế",
+            color = Color(0xFF546E7A),
+            fontSize = 11.sp,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp)
+        )
+    }
+}
+
+// KHUNG ĐIỀU HƯỚNG GIAO DIỆN CHÍNH
 @Composable
 fun DarkThemeAppScaffold(vm: MainViewModel = viewModel()) {
     var selectedTab by remember { mutableStateOf(0) }
 
-    // HỘP THOẠI CẢNH BÁO PHÁT HIỆN ĐƠN TRÙNG
     vm.duplicatePrompt?.let { promptData ->
         AlertDialog(
             onDismissRequest = { vm.dismissDuplicatePrompt() },
@@ -557,4 +657,691 @@ fun TodayDarkScreen(vm: MainViewModel) {
     val pickupRate = if (actualDist > 0) (totalOrderDist / actualDist * 100).toInt() else 0
 
     if (showTripDialog) {
-        TripEdit
+        TripEditDialog(
+            trip = editingTrip,
+            currentDate = vm.todayDate,
+            onDismiss = { showTripDialog = false; editingTrip = null },
+            onSave = { savedTrip ->
+                vm.saveOrUpdateTrip(savedTrip)
+                showTripDialog = false
+                editingTrip = null
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkCardBg),
+                modifier = Modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF1E3A2F)) {
+                                Text("ODO", color = EmeraldAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            }
+                            Text("Đồng hồ ODO xe (km)", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
+                        Text("Lăn bánh: ${String.format("%.1f", actualDist)} km", color = TextGray, fontSize = 12.sp)
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DarkOdoBox("ODO Đầu ca", startInput, { startInput = it; vm.updateShift(vm.todayDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
+                        DarkOdoBox("ODO Cuối ca", endInput, { endInput = it; vm.updateShift(vm.todayDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkCardBg),
+                modifier = Modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(EmeraldAccent))
+                            Text("BẢNG HIỆU QUẢ CA CHẠY", color = TextWhite, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                        }
+                        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF242A2E)) {
+                            Text("${trips.size} cuốc", color = TextGray, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DarkStatBox("Thời gian có khách", String.format("%.1f", totalOrderMin), "phút", TextWhite, Modifier.weight(1f))
+                        DarkStatBox("Km có đơn chở", String.format("%.1f", totalOrderDist), "km", NeonCyan, Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DarkStatBox("Km ODO thực tế", String.format("%.1f", actualDist), "km", TextWhite, Modifier.weight(1f))
+                        DarkStatBox("Tỷ lệ đón khách", "$pickupRate", "%", NeonGreen, Modifier.weight(1f))
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = WarningRedBg),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, WarningRedBorder, RoundedCornerShape(12.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
+                                Text("🛵", fontSize = 24.sp)
+                                Column {
+                                    Text("Km chạy rỗng", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Không chở khách", color = TextGray, fontSize = 11.sp)
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "${String.format("%.1f", emptyDist)} km",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = if (emptyDist > 15) DangerRed else NeonGreen,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                                if (emptyDist > 15) {
+                                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF4A1E24)) {
+                                        Text("Chạy rỗng nhiều!", color = DangerRed, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    modifier = Modifier.weight(1.5f).height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldAccent),
+                    elevation = ButtonDefaults.buttonElevation(4.dp),
+                    enabled = !vm.isScanning
+                ) {
+                    if (vm.isScanning) {
+                        CircularProgressIndicator(color = TextWhite, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Đang quét...", color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("📸  QUÉT ẢNH", color = TextWhite, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+
+                Button(
+                    onClick = { editingTrip = null; showTripDialog = true },
+                    modifier = Modifier.weight(1f).height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF242A2E)),
+                    border = BorderStroke(1.dp, Color(0xFF37474F))
+                ) {
+                    Text("+ Thêm tay", color = NeonCyan, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Danh sách đơn hôm nay (chạm để sửa)", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("${trips.size} đơn", color = TextGray, fontSize = 12.sp)
+            }
+        }
+
+        items(trips) { t ->
+            DarkTripRow(
+                trip = t,
+                onClick = { editingTrip = t; showTripDialog = true },
+                onDelete = { vm.deleteTrip(t.id) }
+            )
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+// TAB 2: THEO NGÀY & DOANH THU & ĐƠN GIÁ
+@Composable
+fun HistoryDarkScreen(vm: MainViewModel) {
+    val selectedDate by vm.selectedDate.collectAsState()
+    val trips by vm.currentTrips.collectAsState()
+    val shift by vm.currentShift.collectAsState()
+
+    var dateInput by remember { mutableStateOf(selectedDate) }
+    var revenueInput by remember { mutableStateOf("") }
+    var startInput by remember { mutableStateOf("") }
+    var endInput by remember { mutableStateOf("") }
+
+    var showTripDialog by remember { mutableStateOf(false) }
+    var editingTrip by remember { mutableStateOf<TripEntity?>(null) }
+
+    val formatter = DecimalFormat("#,###")
+
+    LaunchedEffect(shift) {
+        shift?.let {
+            revenueInput = if (it.revenue > 0) it.revenue.toInt().toString() else ""
+            startInput = if (it.startOdo > 0) it.startOdo.toString() else ""
+            endInput = if (it.endOdo > 0) endInput.ifEmpty { it.endOdo.toString() } else ""
+        }
+    }
+
+    val totalOrderDist = trips.sumOf { it.distanceKm }
+    val sOdo = shift?.startOdo ?: 0.0
+    val eOdo = shift?.endOdo ?: 0.0
+    val actualDist = if (eOdo >= sOdo && sOdo > 0) eOdo - sOdo else 0.0
+    val emptyDist = if (actualDist > totalOrderDist) actualDist - totalOrderDist else 0.0
+    val rev = shift?.revenue ?: 0.0
+
+    val pricePerOrderKm = if (totalOrderDist > 0) rev / totalOrderDist else 0.0
+    val pricePerActualKm = if (actualDist > 0) rev / actualDist else 0.0
+
+    if (showTripDialog) {
+        TripEditDialog(
+            trip = editingTrip,
+            currentDate = selectedDate,
+            onDismiss = { showTripDialog = false; editingTrip = null },
+            onSave = { savedTrip ->
+                vm.saveOrUpdateTrip(savedTrip)
+                showTripDialog = false
+                editingTrip = null
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkCardBg),
+                modifier = Modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Nhập ngày xem dữ liệu (yyyy-MM-dd):", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = dateInput,
+                            onValueChange = { dateInput = it; vm.setDate(it) },
+                            placeholder = { Text("2026-10-11", color = TextGray) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkInputBg,
+                                unfocusedContainerColor = DarkInputBg,
+                                focusedTextColor = TextWhite,
+                                unfocusedTextColor = TextWhite
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = { dateInput = vm.todayDate; vm.setDate(vm.todayDate) },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldAccent)
+                        ) {
+                            Text("Hôm nay", fontWeight = FontWeight.Bold, color = TextWhite)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkCardBg),
+                modifier = Modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Doanh Số Ròng Thực Nhận (VNĐ)", color = NeonGreen, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = revenueInput,
+                        onValueChange = {
+                            revenueInput = it
+                            vm.updateShift(selectedDate, null, null, it.toDoubleOrNull())
+                        },
+                        placeholder = { Text("VD: 750000", color = TextGray) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = DarkInputBg,
+                            unfocusedContainerColor = DarkInputBg,
+                            focusedTextColor = TextWhite,
+                            unfocusedTextColor = TextWhite
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DarkOdoBox("ODO Đầu", startInput, { startInput = it; vm.updateShift(selectedDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
+                        DarkOdoBox("ODO Cuối", endInput, { endInput = it; vm.updateShift(selectedDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF00382E)),
+                modifier = Modifier.border(1.dp, Color(0xFF005A4A), RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Text("HIỆU QUẢ DOANH THU TRÊN TỪNG KM", fontWeight = FontWeight.Black, color = Color(0xFFA7FFEB), fontSize = 12.sp)
+                    Spacer(Modifier.height(14.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF07241E), modifier = Modifier.weight(1f)) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("Đơn giá / Km khách", color = TextGray, fontSize = 11.sp)
+                                Spacer(Modifier.height(4.dp))
+                                Text("${formatter.format(pricePerOrderKm.toLong())} đ", fontSize = 19.sp, fontWeight = FontWeight.Black, color = NeonGreen)
+                                Text("Doanh số ÷ Km khách", color = Color(0xFF6E857F), fontSize = 9.sp)
+                            }
+                        }
+
+                        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF07241E), modifier = Modifier.weight(1f)) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("Đơn giá / Km lăn bánh", color = TextGray, fontSize = 11.sp)
+                                Spacer(Modifier.height(4.dp))
+                                Text("${formatter.format(pricePerActualKm.toLong())} đ", fontSize = 19.sp, fontWeight = FontWeight.Black, color = Color(0xFFFFD54F))
+                                Text("Doanh số ÷ Tổng ODO", color = Color(0xFF6E857F), fontSize = 9.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+                    HorizontalDivider(color = Color(0xFF0B463A))
+                    Spacer(Modifier.height(10.dp))
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Số cuốc: ${trips.size}", color = TextWhite, fontSize = 13.sp)
+                        Text("Km khách: ${String.format("%.1f", totalOrderDist)} km", color = NeonCyan, fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Km lăn bánh: ${String.format("%.1f", actualDist)} km", color = TextWhite, fontSize = 13.sp)
+                        Text("Km rỗng: ${String.format("%.1f", emptyDist)} km", color = DangerRed, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Cuốc ngày $selectedDate (${trips.size})", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                TextButton(onClick = { editingTrip = null; showTripDialog = true }) {
+                    Text("+ Thêm cuốc", color = NeonCyan, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        items(trips) { t ->
+            DarkTripRow(
+                trip = t,
+                onClick = { editingTrip = t; showTripDialog = true },
+                onDelete = { vm.deleteTrip(t.id) }
+            )
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+// TAB 3: TỔNG KẾT TUẦN & THÁNG
+@Composable
+fun PeriodReportScreen(vm: MainViewModel) {
+    val weekTrips by vm.weekTrips.collectAsState()
+    val weekShifts by vm.weekShifts.collectAsState()
+
+    val monthTrips by vm.monthTrips.collectAsState()
+    val monthShifts by vm.monthShifts.collectAsState()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+
+        item {
+            val weekDistOrder = weekTrips.sumOf { it.distanceKm }
+            val weekRev = weekShifts.sumOf { it.revenue }
+            val weekActualDist = weekShifts.sumOf { if (it.endOdo >= it.startOdo && it.startOdo > 0) it.endOdo - it.startOdo else 0.0 }
+            val weekEmptyDist = if (weekActualDist > weekDistOrder) weekActualDist - weekDistOrder else 0.0
+
+            PeriodSummaryCard(
+                title = "TỔNG KẾT TUẦN NÀY (Thứ 2 - CN)",
+                tripCount = weekTrips.size,
+                revenue = weekRev,
+                orderDist = weekDistOrder,
+                actualDist = weekActualDist,
+                emptyDist = weekEmptyDist,
+                headerColor = Color(0xFF00E5FF)
+            )
+        }
+
+        item {
+            val monthDistOrder = monthTrips.sumOf { it.distanceKm }
+            val monthRev = monthShifts.sumOf { it.revenue }
+            val monthActualDist = monthShifts.sumOf { if (it.endOdo >= it.startOdo && it.startOdo > 0) it.endOdo - it.startOdo else 0.0 }
+            val monthEmptyDist = if (monthActualDist > monthDistOrder) monthActualDist - monthDistOrder else 0.0
+
+            PeriodSummaryCard(
+                title = "TỔNG KẾT THÁNG HIỆN TẠI",
+                tripCount = monthTrips.size,
+                revenue = monthRev,
+                orderDist = monthDistOrder,
+                actualDist = monthActualDist,
+                emptyDist = monthEmptyDist,
+                headerColor = EmeraldAccent
+            )
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
+fun PeriodSummaryCard(
+    title: String,
+    tripCount: Int,
+    revenue: Double,
+    orderDist: Double,
+    actualDist: Double,
+    emptyDist: Double,
+    headerColor: Color
+) {
+    val formatter = DecimalFormat("#,###")
+    val pricePerOrderKm = if (orderDist > 0) revenue / orderDist else 0.0
+    val pricePerActualKm = if (actualDist > 0) revenue / actualDist else 0.0
+    val pickupRate = if (actualDist > 0) (orderDist / actualDist * 100).toInt() else 0
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkCardBg),
+        modifier = Modifier.fillMaxWidth().border(1.dp, DarkCardBorder, RoundedCornerShape(16.dp))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(title, color = headerColor, fontWeight = FontWeight.Black, fontSize = 13.5.sp)
+                Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFF242A2E)) {
+                    Text("$tripCount cuốc", color = TextWhite, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF00382E)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Tổng Doanh Thu Ròng:", color = TextGray, fontSize = 13.sp)
+                    Text("${formatter.format(revenue.toLong())} đ", color = NeonGreen, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                DarkStatBox("Đơn giá / Km khách", "${formatter.format(pricePerOrderKm.toLong())} đ", "", NeonGreen, Modifier.weight(1f))
+                DarkStatBox("Đơn giá / Km lăn bánh", "${formatter.format(pricePerActualKm.toLong())} đ", "", Color(0xFFFFD54F), Modifier.weight(1f))
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                DarkStatBox("Km khách tích lũy", String.format("%.1f", orderDist), "km", NeonCyan, Modifier.weight(1f))
+                DarkStatBox("Tổng ODO lăn bánh", String.format("%.1f", actualDist), "km", TextWhite, Modifier.weight(1f))
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = Color(0xFF262B2F))
+            Spacer(Modifier.height(10.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Tỷ lệ đón khách: $pickupRate%", color = NeonGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Km rỗng:", color = TextGray, fontSize = 13.sp)
+                    Text("${String.format("%.1f", emptyDist)} km", color = if (emptyDist > 50) DangerRed else TextWhite, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                }
+            }
+        }
+    }
+}
+
+// HỘP THOẠI SỬA / THÊM CUỐC THỦ CÔNG
+@Composable
+fun TripEditDialog(
+    trip: TripEntity?,
+    currentDate: String,
+    onDismiss: () -> Unit,
+    onSave: (TripEntity) -> Unit
+) {
+    var distInput by remember { mutableStateOf(trip?.distanceKm?.toString() ?: "") }
+    var minInput by remember { mutableStateOf(trip?.durationMinutes?.toString() ?: "") }
+    var srcInput by remember { mutableStateOf(trip?.source ?: "Đơn Xanh SM") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkCardBg,
+        title = {
+            Text(if (trip == null) "Thêm Cuốc Xe Mới" else "Sửa Thông Tin Cuốc", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = distInput,
+                    onValueChange = { distInput = it },
+                    label = { Text("Quãng đường (km)") },
+                    placeholder = { Text("VD: 3.5") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = DarkInputBg,
+                        unfocusedContainerColor = DarkInputBg,
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = minInput,
+                    onValueChange = { minInput = it },
+                    label = { Text("Thời gian (phút)") },
+                    placeholder = { Text("VD: 12.0") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = DarkInputBg,
+                        unfocusedContainerColor = DarkInputBg,
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (srcInput == "Đơn Xanh SM") EmeraldAccent else Color(0xFF242A2E),
+                        modifier = Modifier.clickable { srcInput = "Đơn Xanh SM" }
+                    ) {
+                        Text("Đơn Xanh SM", color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (srcInput == "Google Maps") Color(0xFF1976D2) else Color(0xFF242A2E),
+                        modifier = Modifier.clickable { srcInput = "Google Maps" }
+                    ) {
+                        Text("Google Maps", color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val d = distInput.replace(",", ".").toDoubleOrNull() ?: 0.0
+                    val m = minInput.replace(",", ".").toDoubleOrNull() ?: 0.0
+                    val updated = trip?.copy(distanceKm = d, durationMinutes = m, source = srcInput)
+                        ?: TripEntity(date = currentDate, distanceKm = d, durationMinutes = m, source = srcInput)
+                    onSave(updated)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldAccent)
+            ) {
+                Text("Lưu lại", color = TextWhite, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Hủy", color = TextGray)
+            }
+        }
+    )
+}
+
+// CÁC THÀNH PHẦN CON
+@Composable
+fun DarkOdoBox(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkInputBg),
+        modifier = modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(label, color = TextGray, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    placeholder = { Text("0.0", color = Color(0xFF555B60)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+                Text("km", color = TextGray, fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun DarkStatBox(label: String, value: String, unit: String, color: Color, modifier: Modifier = Modifier) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkInputBg),
+        modifier = modifier.border(1.dp, DarkCardBorder, RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(label, color = TextGray, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(value, fontSize = 18.5.sp, fontWeight = FontWeight.Black, color = color)
+                if (unit.isNotEmpty()) {
+                    Spacer(Modifier.width(3.dp))
+                    Text(unit, color = TextGray, fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DarkTripRow(trip: TripEntity, onClick: () -> Unit, onDelete: () -> Unit) {
+    val isMaps = trip.source == "Google Maps"
+    val badgeBg = if (isMaps) Color(0xFF162736) else Color(0xFF142B22)
+    val badgeColor = if (isMaps) Color(0xFF64B5F6) else EmeraldAccent
+
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkCardBg),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, DarkCardBorder, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${trip.distanceKm} km", color = TextWhite, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("•", color = TextGray)
+                    Text("${trip.durationMinutes} phút", color = Color(0xFFCFD8DC), fontSize = 14.sp)
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(shape = RoundedCornerShape(6.dp), color = badgeBg) {
+                        Text(
+                            trip.source,
+                            color = badgeColor,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Text(trip.date, color = TextGray, fontSize = 12.sp)
+                }
+            }
+            TextButton(
+                onClick = onDelete,
+                colors = ButtonDefaults.textButtonColors(contentColor = DangerRed)
+            ) {
+                Text("Xóa", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
