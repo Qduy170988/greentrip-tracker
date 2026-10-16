@@ -2,11 +2,16 @@
 package com.greentrip.tracker
 
 import android.app.Application
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -52,13 +56,14 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
 
 // ==========================================
-// HỆ THỐNG 6 GIAO DIỆN TUỲ BIẾN (THEMES)
+// HỆ THỐNG 6 GIAO DIỆN HÃNG XE (THEMES)
 // ==========================================
 data class AppThemePalette(
     val id: Int,
@@ -83,7 +88,6 @@ data class AppThemePalette(
 )
 
 val ThemeList = listOf(
-    // 0: Mặc định (Xanh SM Dark)
     AppThemePalette(
         id = 0,
         name = "Mặc định (Xanh Ngọc)",
@@ -105,7 +109,6 @@ val ThemeList = listOf(
         warningBg = Color(0xFF2C1619),
         warningBorder = Color(0xFF4A1F24)
     ),
-    // 1: Màu Vàng (Tài xế Be)
     AppThemePalette(
         id = 1,
         name = "Vàng Be (Tài xế Be)",
@@ -127,7 +130,6 @@ val ThemeList = listOf(
         warningBg = Color(0xFF2E171A),
         warningBorder = Color(0xFF522329)
     ),
-    // 2: Màu Xanh Lá (Tài xế Grab)
     AppThemePalette(
         id = 2,
         name = "Xanh Lá (Tài xế Grab)",
@@ -149,7 +151,6 @@ val ThemeList = listOf(
         warningBg = Color(0xFF2C1619),
         warningBorder = Color(0xFF4A1F24)
     ),
-    // 3: Màu Xanh Cyan (Green SM)
     AppThemePalette(
         id = 3,
         name = "Xanh Cyan (Green SM)",
@@ -171,7 +172,6 @@ val ThemeList = listOf(
         warningBg = Color(0xFF2C1619),
         warningBorder = Color(0xFF4A1F24)
     ),
-    // 4: Giao diện Sáng (Light Mode)
     AppThemePalette(
         id = 4,
         name = "Giao diện Sáng (Rõ nét)",
@@ -193,7 +193,6 @@ val ThemeList = listOf(
         warningBg = Color(0xFFFFEBEE),
         warningBorder = Color(0xFFFFCDD2)
     ),
-    // 5: Giao diện Tối Sâu (Pure Dark AMOLED)
     AppThemePalette(
         id = 5,
         name = "Giao diện Tối Sâu (AMOLED)",
@@ -219,7 +218,93 @@ val ThemeList = listOf(
 
 val LocalAppTheme = compositionLocalOf { ThemeList[0] }
 
+// ==========================================
+// BỘ QUẢN LÝ AUTO SAVE & LOAD VÀO FILE MẶC ĐỊNH
+// ==========================================
+object DefaultBackupManager {
+    private const val FOLDER = "GreenTripTracker"
+    private const val FILE_NAME = "GreenTrip_Backup_Auto.json"
+
+    fun save(context: Context, jsonStr: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val contentUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                val selectionArgs = arrayOf(FILE_NAME, "%$FOLDER%")
+                
+                resolver.query(contentUri, arrayOf(MediaStore.MediaColumns._ID), selection, selectionArgs, null)?.use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                        resolver.delete(ContentUris.withAppendedId(contentUri, id), null, null)
+                    }
+                }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, FILE_NAME)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOCUMENTS}/$FOLDER/")
+                }
+                val newUri = resolver.insert(contentUri, values) ?: return false
+                resolver.openOutputStream(newUri, "wt")?.use { out ->
+                    out.write(jsonStr.toByteArray(Charsets.UTF_8))
+                }
+                true
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), FOLDER)
+                if (!dir.exists()) dir.mkdirs()
+                val file = File(dir, FILE_NAME)
+                file.writeText(jsonStr, Charsets.UTF_8)
+                true
+            }
+        } catch (e: Exception) {
+            try {
+                val file = File(context.getExternalFilesDir(null), FILE_NAME)
+                file.writeText(jsonStr, Charsets.UTF_8)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    fun load(context: Context): String? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val contentUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                val selectionArgs = arrayOf(FILE_NAME, "%$FOLDER%")
+                var targetUri: Uri? = null
+                resolver.query(contentUri, arrayOf(MediaStore.MediaColumns._ID), selection, selectionArgs, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        val id = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                        targetUri = ContentUris.withAppendedId(contentUri, id)
+                    }
+                }
+                if (targetUri != null) {
+                    resolver.openInputStream(targetUri!!)?.use { it.bufferedReader(Charsets.UTF_8).readText() }
+                } else {
+                    val f = File(context.getExternalFilesDir(null), FILE_NAME)
+                    if (f.exists()) f.readText(Charsets.UTF_8) else null
+                }
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), FOLDER)
+                val file = File(dir, FILE_NAME)
+                if (file.exists()) file.readText(Charsets.UTF_8) else {
+                    val f = File(context.getExternalFilesDir(null), FILE_NAME)
+                    if (f.exists()) f.readText(Charsets.UTF_8) else null
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
+// ==========================================
 // 1. DATA ENTITIES & ROOM DATABASE
+// ==========================================
 @Entity(tableName = "trips")
 data class TripEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -266,10 +351,10 @@ interface TripDao {
     @Query("SELECT * FROM shifts WHERE date < :date AND endOdo > 0 ORDER BY date DESC LIMIT 1")
     suspend fun getLatestShiftBefore(date: String): ShiftEntity?
 
-    @Query("SELECT * FROM trips WHERE date BETWEEN :startDate AND :endDate")
+    @Query("SELECT * FROM trips WHERE date BETWEEN :startDate AND :endDate ORDER BY date DESC, id DESC")
     fun getTripsBetween(startDate: String, endDate: String): Flow<List<TripEntity>>
 
-    @Query("SELECT * FROM shifts WHERE date BETWEEN :startDate AND :endDate")
+    @Query("SELECT * FROM shifts WHERE date BETWEEN :startDate AND :endDate ORDER BY date DESC")
     fun getShiftsBetween(startDate: String, endDate: String): Flow<List<ShiftEntity>>
 
     @Query("DELETE FROM trips WHERE id = :id")
@@ -293,7 +378,9 @@ abstract class AppDatabase : RoomDatabase() {
     }
 }
 
-// 2. OCR BÓC TÁCH (XỬ LÝ MÉT & CHẶN BIỂN BÁO AH17)
+// ==========================================
+// 2. OCR BÓC TÁCH (XỬ LÝ MÉT & LỌC NHIỄU)
+// ==========================================
 data class ParsedTrip(val distanceKm: Double, val durationMinutes: Double, val source: String)
 
 class OcrProcessor(private val context: Context) {
@@ -352,7 +439,9 @@ data class DuplicateCheckResult(
     val duplicateTrips: List<TripEntity>
 )
 
-// 3. VIEWMODEL QUẢN LÝ DỮ LIỆU, GIAO DIỆN & BACKUP/RESTORE
+// ==========================================
+// 3. VIEWMODEL ĐIỀU HƯỚNG NGÀY / TUẦN / THÁNG
+// ==========================================
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val appContext = application.applicationContext
     private val prefs = appContext.getSharedPreferences("greentrip_prefs", Context.MODE_PRIVATE)
@@ -371,8 +460,158 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = ThemeList.find { it.id == selectedThemeId } ?: ThemeList[0]
 
     val todayDate: String = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+
+    // --- ĐIỀU HƯỚNG TAB NGÀY ---
+    val dayCal = MutableStateFlow(Calendar.getInstance())
     val selectedDate = MutableStateFlow(todayDate)
 
+    fun previousDay() {
+        val c = dayCal.value.clone() as Calendar
+        c.add(Calendar.DAY_OF_YEAR, -1)
+        dayCal.value = c
+        selectedDate.value = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(c.time)
+    }
+
+    fun nextDay() {
+        val c = dayCal.value.clone() as Calendar
+        c.add(Calendar.DAY_OF_YEAR, 1)
+        dayCal.value = c
+        selectedDate.value = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(c.time)
+    }
+
+    fun goToToday() {
+        val c = Calendar.getInstance()
+        dayCal.value = c
+        selectedDate.value = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(c.time)
+    }
+
+    fun isTodaySelected(): Boolean {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        return sdf.format(dayCal.value.time) == todayDate
+    }
+
+    fun getSelectedDayTitle(): String {
+        val c = dayCal.value
+        val dayOfWeek = when (c.get(Calendar.DAY_OF_WEEK)) {
+            Calendar.MONDAY -> "Thứ Hai"
+            Calendar.TUESDAY -> "Thứ Ba"
+            Calendar.WEDNESDAY -> "Thứ Tư"
+            Calendar.THURSDAY -> "Thứ Năm"
+            Calendar.FRIDAY -> "Thứ Sáu"
+            Calendar.SATURDAY -> "Thứ Bảy"
+            Calendar.SUNDAY -> "Chủ Nhật"
+            else -> ""
+        }
+        val df = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+        return "$dayOfWeek, ${df.format(c.time)}"
+    }
+
+    // --- ĐIỀU HƯỚNG TAB TUẦN ---
+    val weekCal = MutableStateFlow(Calendar.getInstance().apply { firstDayOfWeek = Calendar.MONDAY })
+
+    fun previousWeek() {
+        val c = weekCal.value.clone() as Calendar
+        c.add(Calendar.WEEK_OF_YEAR, -1)
+        weekCal.value = c
+    }
+
+    fun nextWeek() {
+        val c = weekCal.value.clone() as Calendar
+        c.add(Calendar.WEEK_OF_YEAR, 1)
+        weekCal.value = c
+    }
+
+    fun goToCurrentWeek() {
+        weekCal.value = Calendar.getInstance().apply { firstDayOfWeek = Calendar.MONDAY }
+    }
+
+    fun isCurrentWeekSelected(): Boolean {
+        val now = Calendar.getInstance().apply { firstDayOfWeek = Calendar.MONDAY }
+        return weekCal.value.get(Calendar.WEEK_OF_YEAR) == now.get(Calendar.WEEK_OF_YEAR) &&
+               weekCal.value.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+    }
+
+    fun getSelectedWeekTitle(): String {
+        val c = weekCal.value.clone() as Calendar
+        c.firstDayOfWeek = Calendar.MONDAY
+        c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        val sdf = SimpleDateFormat("dd/MM", Locale.getDefault())
+        val start = sdf.format(c.time)
+        c.add(Calendar.DAY_OF_WEEK, 6)
+        val end = sdf.format(c.time)
+        val year = c.get(Calendar.YEAR)
+        val weekNum = c.get(Calendar.WEEK_OF_YEAR)
+        return "Tuần $weekNum ($start - $end/$year)"
+    }
+
+    private val currentWeekBounds = weekCal.map { cal ->
+        val c = cal.clone() as Calendar
+        c.firstDayOfWeek = Calendar.MONDAY
+        c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val s = sdf.format(c.time)
+        c.add(Calendar.DAY_OF_WEEK, 6)
+        val e = sdf.format(c.time)
+        Pair(s, e)
+    }
+
+    val selectedWeekTrips = currentWeekBounds.flatMapLatest { (s, e) ->
+        dao.getTripsBetween(s, e)
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val selectedWeekShifts = currentWeekBounds.flatMapLatest { (s, e) ->
+        dao.getShiftsBetween(s, e)
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // --- ĐIỀU HƯỚNG TAB THÁNG ---
+    val monthCal = MutableStateFlow(Calendar.getInstance())
+
+    fun previousMonth() {
+        val c = monthCal.value.clone() as Calendar
+        c.add(Calendar.MONTH, -1)
+        monthCal.value = c
+    }
+
+    fun nextMonth() {
+        val c = monthCal.value.clone() as Calendar
+        c.add(Calendar.MONTH, 1)
+        monthCal.value = c
+    }
+
+    fun goToCurrentMonth() {
+        monthCal.value = Calendar.getInstance()
+    }
+
+    fun isCurrentMonthSelected(): Boolean {
+        val now = Calendar.getInstance()
+        return monthCal.value.get(Calendar.MONTH) == now.get(Calendar.MONTH) &&
+               monthCal.value.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+    }
+
+    fun getSelectedMonthTitle(): String {
+        val c = monthCal.value
+        return "Tháng ${c.get(Calendar.MONTH) + 1} / ${c.get(Calendar.YEAR)}"
+    }
+
+    private val currentMonthBounds = monthCal.map { cal ->
+        val c = cal.clone() as Calendar
+        c.set(Calendar.DAY_OF_MONTH, 1)
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val s = sdf.format(c.time)
+        c.set(Calendar.DAY_OF_MONTH, c.getActualMaximum(Calendar.DAY_OF_MONTH))
+        val e = sdf.format(c.time)
+        Pair(s, e)
+    }
+
+    val selectedMonthTrips = currentMonthBounds.flatMapLatest { (s, e) ->
+        dao.getTripsBetween(s, e)
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val selectedMonthShifts = currentMonthBounds.flatMapLatest { (s, e) ->
+        dao.getShiftsBetween(s, e)
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    // DỮ LIỆU NGÀY
     val currentTrips = selectedDate.flatMapLatest { dao.getTripsByDate(it) }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
@@ -381,19 +620,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var isScanning by mutableStateOf(false)
     var duplicatePrompt by mutableStateOf<DuplicateCheckResult?>(null)
-
-    private val weekRange = getWeekRange(todayDate)
-    private val monthRange = getMonthRange(todayDate)
-
-    val weekTrips = dao.getTripsBetween(weekRange.first, weekRange.second)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-    val weekShifts = dao.getShiftsBetween(weekRange.first, weekRange.second)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    val monthTrips = dao.getTripsBetween(monthRange.first, monthRange.second)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-    val monthShifts = dao.getShiftsBetween(monthRange.first, monthRange.second)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     init {
         checkAndAutofillStartOdo()
@@ -418,149 +644,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setDate(date: String) { selectedDate.value = date }
-
-    fun processImages(uris: List<Uri>, forDate: String) {
-        viewModelScope.launch {
-            isScanning = true
-            val parsedList = uris.mapNotNull { ocrProcessor.processImageUri(it) }
-                .filter { it.distanceKm > 0 || it.durationMinutes > 0 }
-
-            val currentExisting = dao.getTripsByDate(forDate).first()
-            val uniqueList = mutableListOf<TripEntity>()
-            val duplicateList = mutableListOf<TripEntity>()
-
-            for (p in parsedList) {
-                val isDupWithExisting = currentExisting.any {
-                    abs(it.distanceKm - p.distanceKm) < 0.05 && abs(it.durationMinutes - p.durationMinutes) < 0.2
-                }
-                val isDupWithUnique = uniqueList.any {
-                    abs(it.distanceKm - p.distanceKm) < 0.05 && abs(it.durationMinutes - p.durationMinutes) < 0.2
-                }
-
-                val entity = TripEntity(
-                    date = forDate,
-                    distanceKm = p.distanceKm,
-                    durationMinutes = p.durationMinutes,
-                    source = p.source
-                )
-
-                if (isDupWithExisting || isDupWithUnique) {
-                    duplicateList.add(entity)
-                } else {
-                    uniqueList.add(entity)
-                }
-            }
-
-            if (duplicateList.isNotEmpty()) {
-                duplicatePrompt = DuplicateCheckResult(uniqueList, duplicateList)
-            } else if (uniqueList.isNotEmpty()) {
-                dao.insertTrips(uniqueList)
-            }
-            isScanning = false
+    // TỰ ĐỘNG SAO LƯU NGẦM VÀO FILE MẶC ĐỊNH
+    private fun autoSaveSilently() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val trips = dao.getAllTrips()
+                val shifts = dao.getAllShifts()
+                val json = buildJsonString(trips, shifts)
+                DefaultBackupManager.save(appContext, json)
+            } catch (_: Exception) {}
         }
     }
 
-    fun confirmSaveOnlyUnique() {
-        viewModelScope.launch {
-            duplicatePrompt?.uniqueTrips?.let {
-                if (it.isNotEmpty()) dao.insertTrips(it)
-            }
-            duplicatePrompt = null
-        }
-    }
-
-    fun confirmSaveAll() {
-        viewModelScope.launch {
-            duplicatePrompt?.let { prompt ->
-                val all = prompt.uniqueTrips + prompt.duplicateTrips
-                if (all.isNotEmpty()) dao.insertTrips(all)
-            }
-            duplicatePrompt = null
-        }
-    }
-
-    fun dismissDuplicatePrompt() {
-        duplicatePrompt = null
-    }
-
-    fun saveOrUpdateTrip(trip: TripEntity) {
-        viewModelScope.launch {
-            dao.insertOrUpdateTrip(trip)
-        }
-    }
-
-    fun updateShift(date: String, start: Double?, end: Double?, revenue: Double?) {
-        viewModelScope.launch {
-            val cur = dao.getShiftByDate(date).firstOrNull() ?: ShiftEntity(date = date)
-            dao.saveShift(
-                cur.copy(
-                    startOdo = start ?: cur.startOdo,
-                    endOdo = end ?: cur.endOdo,
-                    revenue = revenue ?: cur.revenue
-                )
-            )
-        }
-    }
-
-    fun deleteTrip(id: Long) = viewModelScope.launch { dao.deleteTrip(id) }
-
-    // CHỨC NĂNG 1: SAVE DỮ LIỆU RA FILE JSON TRONG DOCUMENTS
-    fun exportDataToUri(uri: Uri) {
+    fun manualBackupDefault() {
         viewModelScope.launch {
             try {
                 val trips = withContext(Dispatchers.IO) { dao.getAllTrips() }
                 val shifts = withContext(Dispatchers.IO) { dao.getAllShifts() }
-
-                val root = JSONObject()
-                root.put("version", 1)
-                root.put("exportDate", todayDate)
-
-                val shiftsArr = JSONArray()
-                for (s in shifts) {
-                    val obj = JSONObject()
-                    obj.put("date", s.date)
-                    obj.put("startOdo", s.startOdo)
-                    obj.put("endOdo", s.endOdo)
-                    obj.put("revenue", s.revenue)
-                    shiftsArr.put(obj)
+                val json = buildJsonString(trips, shifts)
+                val success = withContext(Dispatchers.IO) { DefaultBackupManager.save(appContext, json) }
+                if (success) {
+                    Toast.makeText(appContext, "✅ Đã lưu ${trips.size} cuốc & ${shifts.size} ngày vào file mặc định!", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(appContext, "❌ Lưu file thất bại, vui lòng thử lại!", Toast.LENGTH_SHORT).show()
                 }
-                root.put("shifts", shiftsArr)
-
-                val tripsArr = JSONArray()
-                for (t in trips) {
-                    val obj = JSONObject()
-                    obj.put("date", t.date)
-                    obj.put("distanceKm", t.distanceKm)
-                    obj.put("durationMinutes", t.durationMinutes)
-                    obj.put("source", t.source)
-                    tripsArr.put(obj)
-                }
-                root.put("trips", tripsArr)
-
-                withContext(Dispatchers.IO) {
-                    appContext.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(root.toString(2).toByteArray(Charsets.UTF_8))
-                    }
-                }
-                Toast.makeText(appContext, "✅ Đã Save ${trips.size} cuốc & ${shifts.size} ca chạy thành công!", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
-                Toast.makeText(appContext, "❌ Lỗi khi lưu dữ liệu: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                Toast.makeText(appContext, "❌ Lỗi: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // CHỨC NĂNG 2: LOAD DỮ LIỆU TỪ FILE JSON KHÔI PHỤC VÀO APP
-    fun importDataFromUri(uri: Uri) {
+    fun manualRestoreDefault() {
         viewModelScope.launch {
             try {
-                val jsonStr = withContext(Dispatchers.IO) {
-                    appContext.contentResolver.openInputStream(uri)?.use { input ->
-                        input.bufferedReader(Charsets.UTF_8).readText()
-                    } ?: ""
-                }
-                if (jsonStr.isBlank()) {
-                    Toast.makeText(appContext, "❌ File trống hoặc không hợp lệ!", Toast.LENGTH_SHORT).show()
+                val jsonStr = withContext(Dispatchers.IO) { DefaultBackupManager.load(appContext) }
+                if (jsonStr.isNullOrBlank()) {
+                    Toast.makeText(appContext, "❌ Chưa tìm thấy file sao lưu mặc định!", Toast.LENGTH_LONG).show()
                     return@launch
                 }
 
@@ -597,14 +716,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             it.date == d && abs(it.distanceKm - dist) < 0.01 && abs(it.durationMinutes - min) < 0.1 && it.source == src
                         }
                         if (!alreadyExists) {
-                            tripsToInsert.add(
-                                TripEntity(
-                                    date = d,
-                                    distanceKm = dist,
-                                    durationMinutes = min,
-                                    source = src
-                                )
-                            )
+                            tripsToInsert.add(TripEntity(date = d, distanceKm = dist, durationMinutes = min, source = src))
                         }
                     }
                 }
@@ -614,44 +726,139 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (tripsToInsert.isNotEmpty()) dao.insertTrips(tripsToInsert)
                 }
 
-                Toast.makeText(
-                    appContext,
-                    "✅ Đã khôi phục ${shiftsToInsert.size} ca chạy & ${tripsToInsert.size} cuốc xe mới!",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(appContext, "✅ Đã khôi phục ${shiftsToInsert.size} ngày & ${tripsToInsert.size} cuốc xe từ file mặc định!", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
-                Toast.makeText(appContext, "❌ File không đúng định dạng sao lưu!", Toast.LENGTH_LONG).show()
+                Toast.makeText(appContext, "❌ Lỗi đọc file sao lưu!", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    companion object {
-        fun getWeekRange(dateStr: String): Pair<String, String> {
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val cal = Calendar.getInstance()
-            cal.time = sdf.parse(dateStr) ?: Date()
-            cal.firstDayOfWeek = Calendar.MONDAY
-            cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-            val start = sdf.format(cal.time)
-            cal.add(Calendar.DAY_OF_WEEK, 6)
-            val end = sdf.format(cal.time)
-            return Pair(start, end)
-        }
+    private fun buildJsonString(trips: List<TripEntity>, shifts: List<ShiftEntity>): String {
+        val root = JSONObject()
+        root.put("version", 1)
+        root.put("exportDate", todayDate)
 
-        fun getMonthRange(dateStr: String): Pair<String, String> {
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val cal = Calendar.getInstance()
-            cal.time = sdf.parse(dateStr) ?: Date()
-            cal.set(Calendar.DAY_OF_MONTH, 1)
-            val start = sdf.format(cal.time)
-            cal.set(Calendar.DAY_OF_MONTH, cal.getActualMaximum(Calendar.DAY_OF_MONTH))
-            val end = sdf.format(cal.time)
-            return Pair(start, end)
+        val shiftsArr = JSONArray()
+        for (s in shifts) {
+            val obj = JSONObject()
+            obj.put("date", s.date)
+            obj.put("startOdo", s.startOdo)
+            obj.put("endOdo", s.endOdo)
+            obj.put("revenue", s.revenue)
+            shiftsArr.put(obj)
         }
+        root.put("shifts", shiftsArr)
+
+        val tripsArr = JSONArray()
+        for (t in trips) {
+            val obj = JSONObject()
+            obj.put("date", t.date)
+            obj.put("distanceKm", t.distanceKm)
+            obj.put("durationMinutes", t.durationMinutes)
+            obj.put("source", t.source)
+            tripsArr.put(obj)
+        }
+        root.put("trips", tripsArr)
+
+        return root.toString(2)
+    }
+
+    fun processImages(uris: List<Uri>, forDate: String) {
+        viewModelScope.launch {
+            isScanning = true
+            val parsedList = uris.mapNotNull { ocrProcessor.processImageUri(it) }
+                .filter { it.distanceKm > 0 || it.durationMinutes > 0 }
+
+            val currentExisting = dao.getTripsByDate(forDate).first()
+            val uniqueList = mutableListOf<TripEntity>()
+            val duplicateList = mutableListOf<TripEntity>()
+
+            for (p in parsedList) {
+                val isDupWithExisting = currentExisting.any {
+                    abs(it.distanceKm - p.distanceKm) < 0.05 && abs(it.durationMinutes - p.durationMinutes) < 0.2
+                }
+                val isDupWithUnique = uniqueList.any {
+                    abs(it.distanceKm - p.distanceKm) < 0.05 && abs(it.durationMinutes - p.durationMinutes) < 0.2
+                }
+
+                val entity = TripEntity(date = forDate, distanceKm = p.distanceKm, durationMinutes = p.durationMinutes, source = p.source)
+
+                if (isDupWithExisting || isDupWithUnique) {
+                    duplicateList.add(entity)
+                } else {
+                    uniqueList.add(entity)
+                }
+            }
+
+            if (duplicateList.isNotEmpty()) {
+                duplicatePrompt = DuplicateCheckResult(uniqueList, duplicateList)
+            } else if (uniqueList.isNotEmpty()) {
+                dao.insertTrips(uniqueList)
+                autoSaveSilently()
+            }
+            isScanning = false
+        }
+    }
+
+    fun confirmSaveOnlyUnique() {
+        viewModelScope.launch {
+            duplicatePrompt?.uniqueTrips?.let {
+                if (it.isNotEmpty()) {
+                    dao.insertTrips(it)
+                    autoSaveSilently()
+                }
+            }
+            duplicatePrompt = null
+        }
+    }
+
+    fun confirmSaveAll() {
+        viewModelScope.launch {
+            duplicatePrompt?.let { prompt ->
+                val all = prompt.uniqueTrips + prompt.duplicateTrips
+                if (all.isNotEmpty()) {
+                    dao.insertTrips(all)
+                    autoSaveSilently()
+                }
+            }
+            duplicatePrompt = null
+        }
+    }
+
+    fun dismissDuplicatePrompt() {
+        duplicatePrompt = null
+    }
+
+    fun saveOrUpdateTrip(trip: TripEntity) {
+        viewModelScope.launch {
+            dao.insertOrUpdateTrip(trip)
+            autoSaveSilently()
+        }
+    }
+
+    fun updateShift(date: String, start: Double?, end: Double?, revenue: Double?) {
+        viewModelScope.launch {
+            val cur = dao.getShiftByDate(date).firstOrNull() ?: ShiftEntity(date = date)
+            dao.saveShift(
+                cur.copy(
+                    startOdo = start ?: cur.startOdo,
+                    endOdo = end ?: cur.endOdo,
+                    revenue = revenue ?: cur.revenue
+                )
+            )
+            autoSaveSilently()
+        }
+    }
+
+    fun deleteTrip(id: Long) = viewModelScope.launch {
+        dao.deleteTrip(id)
+        autoSaveSilently()
     }
 }
 
-// 4. MAIN ACTIVITY VỚI MÀN HÌNH LOADING
+// ==========================================
+// 4. MAIN ACTIVITY & CẤU TRÚC GIAO DIỆN MỚI
+// ==========================================
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -660,9 +867,7 @@ class MainActivity : ComponentActivity() {
             val theme = vm.currentTheme
 
             CompositionLocalProvider(LocalAppTheme provides theme) {
-                MaterialTheme(
-                    colorScheme = if (theme.isLight) lightColorScheme() else darkColorScheme()
-                ) {
+                MaterialTheme(colorScheme = if (theme.isLight) lightColorScheme() else darkColorScheme()) {
                     Surface(modifier = Modifier.fillMaxSize(), color = theme.bg) {
                         var isLoading by remember { mutableStateOf(true) }
 
@@ -674,7 +879,7 @@ class MainActivity : ComponentActivity() {
                         if (isLoading) {
                             AppLoadingScreen()
                         } else {
-                            MainThemedScaffold(vm)
+                            MainDrawerScaffold(vm)
                         }
                     }
                 }
@@ -689,17 +894,10 @@ fun AppLoadingScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(theme.headerTop, theme.headerMid, theme.bg)
-                )
-            ),
+            .background(Brush.verticalGradient(colors = listOf(theme.headerTop, theme.headerMid, theme.bg))),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Box(
                 modifier = Modifier
                     .size(88.dp)
@@ -713,155 +911,35 @@ fun AppLoadingScreen() {
 
             Spacer(Modifier.height(18.dp))
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "GreenTrip Tracker",
-                    color = if (theme.isLight) Color.White else theme.textPrimary,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 23.sp
-                )
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = theme.accent.copy(alpha = 0.25f)
-                ) {
-                    Text(
-                        text = theme.badgeText,
-                        color = if (theme.isLight) Color.White else theme.accent,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("GreenTrip Tracker", color = if (theme.isLight) Color.White else theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 23.sp)
+                Surface(shape = RoundedCornerShape(6.dp), color = theme.accent.copy(alpha = 0.25f)) {
+                    Text(theme.badgeText, color = if (theme.isLight) Color.White else theme.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                 }
             }
 
             Spacer(Modifier.height(6.dp))
-            Text(
-                text = "Hệ thống quản lý chuyến đi & ODO",
-                color = if (theme.isLight) Color(0xFFE0F2F1) else theme.textSecondary,
-                fontSize = 13.sp
-            )
+            Text("Hệ thống quản lý chuyến đi & ODO", color = if (theme.isLight) Color(0xFFE0F2F1) else theme.textSecondary, fontSize = 13.sp)
 
             Spacer(Modifier.height(34.dp))
-
-            CircularProgressIndicator(
-                color = theme.accent,
-                strokeWidth = 3.dp,
-                modifier = Modifier.size(28.dp)
-            )
-
+            CircularProgressIndicator(color = theme.accent, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(12.dp))
-            Text(
-                text = "Đang đồng bộ dữ liệu ca chạy...",
-                color = if (theme.isLight) Color(0xFFB2DFDB) else theme.textSecondary,
-                fontSize = 12.sp
-            )
+            Text("Đang đồng bộ dữ liệu ngày chạy...", color = if (theme.isLight) Color(0xFFB2DFDB) else theme.textSecondary, fontSize = 12.sp)
         }
     }
 }
 
-// KHUNG GIAO DIỆN CHÍNH TÍCH HỢP CHỌN THEME & SAVE/LOAD DỮ LIỆU
+// KHUNG GIAO DIỆN CHÍNH: MENU TRƯỢT TRÁI (DRAWER) + BOTTOM BAR 4 TAB
 @Composable
-fun MainThemedScaffold(vm: MainViewModel) {
+fun MainDrawerScaffold(vm: MainViewModel) {
     val theme = LocalAppTheme.current
-    var selectedTab by remember { mutableStateOf(0) }
-    var showThemeDialog by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    var selectedTab by remember { mutableStateOf(0) } // 0: Hôm nay, 1: Ngày, 2: Tuần, 3: Tháng
 
-    // Bộ chọn vị trí lưu file JSON (Save dữ liệu)
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? ->
-        if (uri != null) {
-            vm.exportDataToUri(uri)
-        }
-    }
+    var showTripDialog by remember { mutableStateOf(false) }
 
-    // Bộ mở file JSON từ bộ nhớ máy (Load dữ liệu)
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            vm.importDataFromUri(uri)
-        }
-    }
-
-    // Hộp thoại chọn 6 Giao diện
-    if (showThemeDialog) {
-        AlertDialog(
-            onDismissRequest = { showThemeDialog = false },
-            containerColor = theme.cardBg,
-            shape = RoundedCornerShape(18.dp),
-            title = {
-                Text(
-                    "🎨 Chọn Giao Diện Ứng Dụng",
-                    color = theme.textPrimary,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 17.sp
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ThemeList.forEach { item ->
-                        val isSelected = item.id == theme.id
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) item.accent.copy(alpha = 0.2f) else theme.inputBg,
-                            border = BorderStroke(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) item.accent else theme.cardBorder
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    vm.selectTheme(item.id)
-                                    showThemeDialog = false
-                                }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .clip(CircleShape)
-                                            .background(item.accent)
-                                            .border(1.dp, Color.White.copy(alpha = 0.5f), CircleShape)
-                                    )
-                                    Text(
-                                        text = item.name,
-                                        color = theme.textPrimary,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        fontSize = 13.5.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                if (isSelected) {
-                                    Text("✓ Đang dùng", color = item.accent, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showThemeDialog = false }) {
-                    Text("Đóng", color = theme.accent, fontWeight = FontWeight.Bold)
-                }
-            }
-        )
-    }
-
-    // Hộp thoại cảnh báo đơn trùng lặp
+    // HỘP THOẠI ĐƠN TRÙNG
     vm.duplicatePrompt?.let { promptData ->
         AlertDialog(
             onDismissRequest = { vm.dismissDuplicatePrompt() },
@@ -875,11 +953,7 @@ fun MainThemedScaffold(vm: MainViewModel) {
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Có ${promptData.duplicateTrips.size} đơn trùng số km & thời gian với dữ liệu đã có:",
-                        color = theme.textSecondary,
-                        fontSize = 13.sp
-                    )
+                    Text("Có ${promptData.duplicateTrips.size} đơn trùng số km & thời gian với dữ liệu đã có:", color = theme.textSecondary, fontSize = 13.sp)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -891,9 +965,6 @@ fun MainThemedScaffold(vm: MainViewModel) {
                         promptData.duplicateTrips.take(4).forEach { d ->
                             Text("• ${d.distanceKm} km - ${d.durationMinutes} ph (${d.source})", color = theme.highlight2, fontSize = 12.sp)
                         }
-                        if (promptData.duplicateTrips.size > 4) {
-                            Text("và ${promptData.duplicateTrips.size - 4} đơn khác...", color = theme.textSecondary, fontSize = 11.sp)
-                        }
                     }
                 }
             },
@@ -903,12 +974,7 @@ fun MainThemedScaffold(vm: MainViewModel) {
                     colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text(
-                        text = if (promptData.uniqueTrips.isNotEmpty()) "Bỏ qua trùng (${promptData.uniqueTrips.size} mới)" else "Bỏ qua tất cả",
-                        color = theme.onAccent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.5.sp
-                    )
+                    Text("Bỏ qua trùng (${promptData.uniqueTrips.size} mới)", color = theme.onAccent, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                 }
             },
             dismissButton = {
@@ -919,227 +985,245 @@ fun MainThemedScaffold(vm: MainViewModel) {
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(theme.bg)) {
-        // PHẦN HEADER + THANH CÔNG CỤ SAO LƯU & ĐỔI GIAO DIỆN
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(theme.headerTop, theme.headerMid, theme.bg)
-                    )
-                )
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-        ) {
-            Column {
-                // Hàng 1: Logo + Tên App + Nút chọn Giao diện
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+    if (showTripDialog) {
+        TripEditDialog(
+            trip = null,
+            currentDate = vm.todayDate,
+            onDismiss = { showTripDialog = false },
+            onSave = { savedTrip ->
+                vm.saveOrUpdateTrip(savedTrip)
+                showTripDialog = false
+            }
+        )
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = theme.cardBg,
+                drawerContentColor = theme.textPrimary,
+                modifier = Modifier.width(310.dp)
+            ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.25f))
-                                .border(1.dp, theme.accent.copy(alpha = 0.6f), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("⚡", fontSize = 18.sp)
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(theme.accent)
+                                    .border(1.dp, Color.White, CircleShape),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "GreenTrip",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 17.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = Color.Black.copy(alpha = 0.35f)
-                                ) {
-                                    Text(
-                                        text = theme.badgeText,
-                                        color = if (theme.isLight) Color(0xFFFFE082) else theme.accent,
-                                        fontSize = 9.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                    )
+                                Text("⚡", fontSize = 22.sp)
+                            }
+                            Column {
+                                Text("GreenTrip Tracker", fontWeight = FontWeight.Black, color = theme.textPrimary, fontSize = 17.sp)
+                                Text("Quản lý hiệu quả ngày chạy", color = theme.textSecondary, fontSize = 12.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        HorizontalDivider(color = theme.cardBorder)
+                    }
+
+                    item {
+                        Text("DỮ LIỆU & SAO LƯU TỰ ĐỘNG", color = theme.accent, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                        Spacer(Modifier.height(8.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = theme.inputBg,
+                            border = BorderStroke(1.dp, theme.cardBorder),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.manualBackupDefault()
+                                    scope.launch { drawerState.close() }
+                                }
+                        ) {
+                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("💾", fontSize = 18.sp)
+                                Column {
+                                    Text("Sao lưu vào file mặc định", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Lưu an toàn vào Documents/GreenTripTracker", color = theme.textSecondary, fontSize = 10.5.sp)
                                 }
                             }
-                            Text(
-                                text = "Ngày: ${vm.todayDate}",
-                                color = Color.White.copy(alpha = 0.75f),
-                                fontSize = 11.5.sp,
-                                maxLines = 1
-                            )
                         }
-                    }
 
-                    // Nút Đổi Giao Diện
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = Color.Black.copy(alpha = 0.35f),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                        modifier = Modifier.clickable { showThemeDialog = true }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        Spacer(Modifier.height(8.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = theme.inputBg,
+                            border = BorderStroke(1.dp, theme.cardBorder),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.manualRestoreDefault()
+                                    scope.launch { drawerState.close() }
+                                }
                         ) {
-                            Text("🎨", fontSize = 13.sp)
-                            Text(
-                                text = "Giao diện",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
-
-                // Hàng 2: 2 Nút SAVE DỮ LIỆU & LOAD DỮ LIỆU (Chống mất dữ liệu khi xoá/update app)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = theme.cardBg.copy(alpha = 0.9f),
-                        border = BorderStroke(1.dp, theme.cardBorder),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                exportLauncher.launch("GreenTrip_Backup_${vm.todayDate}.json")
+                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("📂", fontSize = 18.sp)
+                                Column {
+                                    Text("Khôi phục từ file mặc định", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Đọc lại toàn bộ cuốc xe & doanh thu", color = theme.textSecondary, fontSize = 10.5.sp)
+                                }
                             }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("💾", fontSize = 13.sp)
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                text = "Save dữ liệu",
-                                color = theme.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
 
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = theme.cardBg.copy(alpha = 0.9f),
-                        border = BorderStroke(1.dp, theme.cardBorder),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                importLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                    item {
+                        Spacer(Modifier.height(6.dp))
+                        Text("CHỌN GIAO DIỆN CHỦ ĐẠO (6 THEMES)", color = theme.accent, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+                        Spacer(Modifier.height(8.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ThemeList.forEach { item ->
+                                val isSelected = item.id == theme.id
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isSelected) item.accent.copy(alpha = 0.2f) else theme.inputBg,
+                                    border = BorderStroke(if (isSelected) 1.5.dp else 1.dp, if (isSelected) item.accent else theme.cardBorder),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            vm.selectTheme(item.id)
+                                            scope.launch { drawerState.close() }
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Box(modifier = Modifier.size(16.dp).clip(CircleShape).background(item.accent))
+                                            Text(item.name, color = theme.textPrimary, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, fontSize = 12.5.sp)
+                                        }
+                                        if (isSelected) {
+                                            Text("✓", color = item.accent, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                                        }
+                                    }
+                                }
                             }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("📂", fontSize = 13.sp)
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                text = "Load dữ liệu",
-                                color = theme.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
-                }
 
-                Spacer(Modifier.height(10.dp))
-
-                // Hàng 3: Thanh chuyển 3 Tab chia đều chống tràn chữ
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(if (theme.isLight) Color.Black.copy(alpha = 0.15f) else Color(0xFF161A1D))
-                        .padding(3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    TabPillItem("Hôm nay", selectedTab == 0, Modifier.weight(1f)) {
-                        selectedTab = 0
-                        vm.setDate(vm.todayDate)
-                    }
-                    TabPillItem("Theo ngày", selectedTab == 1, Modifier.weight(1f)) {
-                        selectedTab = 1
-                    }
-                    TabPillItem("Tuần / Tháng", selectedTab == 2, Modifier.weight(1f)) {
-                        selectedTab = 2
+                    item {
+                        Spacer(Modifier.height(10.dp))
+                        Text("Phiên bản 1.3 • Chạy Offline 100%", color = theme.textSecondary, fontSize = 11.sp)
                     }
                 }
             }
         }
+    ) {
+        Scaffold(
+            topBar = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(colors = listOf(theme.headerTop, theme.headerMid)))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color.Black.copy(alpha = 0.3f),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                                modifier = Modifier.clickable { scope.launch { drawerState.open() } }
+                            ) {
+                                Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+                                    Text("☰", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
 
-        Box(modifier = Modifier.weight(1f)) {
-            when (selectedTab) {
-                0 -> TodayScreen(vm)
-                1 -> HistoryScreen(vm)
-                2 -> PeriodReportScreen(vm)
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("GreenTrip", color = Color.White, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                                    Surface(shape = RoundedCornerShape(4.dp), color = Color.Black.copy(alpha = 0.35f)) {
+                                        Text(theme.badgeText, color = if (theme.isLight) Color(0xFFFFE082) else theme.accent, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                                    }
+                                }
+                                Text("Hôm nay: ${vm.todayDate}", color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = { showTripDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("+ Thêm tay", color = theme.onAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            bottomBar = {
+                // THANH ĐIỀU HƯỚNG 4 TAB DƯỚI ĐÁY MÀN HÌNH
+                Surface(
+                    color = theme.cardBg,
+                    border = BorderStroke(1.dp, theme.cardBorder),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        BottomBarItem("⚡ Hôm nay", selectedTab == 0, theme) { selectedTab = 0; vm.goToToday() }
+                        BottomBarItem("📅 Ngày", selectedTab == 1, theme) { selectedTab = 1 }
+                        BottomBarItem("📆 Tuần", selectedTab == 2, theme) { selectedTab = 2 }
+                        BottomBarItem("📊 Tháng", selectedTab == 3, theme) { selectedTab = 3 }
+                    }
+                }
+            }
+        ) { paddingValues ->
+            Box(modifier = Modifier.fillMaxSize().padding(paddingValues).background(theme.bg)) {
+                when (selectedTab) {
+                    0 -> TodayScreen(vm)
+                    1 -> DayScreen(vm)
+                    2 -> WeekScreen(vm)
+                    3 -> MonthScreen(vm)
+                }
             }
         }
     }
 }
 
 @Composable
-fun TabPillItem(text: String, isSelected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val theme = LocalAppTheme.current
+fun BottomBarItem(label: String, isSelected: Boolean, theme: AppThemePalette, onClick: () -> Unit) {
     Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (isSelected) theme.accent else Color.Transparent)
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isSelected) theme.accent.copy(alpha = 0.18f) else Color.Transparent)
             .clickable { onClick() }
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .padding(vertical = 8.dp, horizontal = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = text,
-            color = if (isSelected) theme.onAccent else Color.White.copy(alpha = 0.8f),
-            fontWeight = FontWeight.Bold,
+            text = label,
+            color = if (isSelected) theme.accent else theme.textSecondary,
+            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold,
             fontSize = 12.sp,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis
+            maxLines = 1
         )
     }
 }
 
 // ==========================================
-// TAB 1: CA CHẠY HÔM NAY
+// TAB 0: HÔM NAY (ĐÃ ĐỔI THÀNH NGÀY CHẠY)
 // ==========================================
 @Composable
 fun TodayScreen(vm: MainViewModel) {
@@ -1188,9 +1272,9 @@ fun TodayScreen(vm: MainViewModel) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { Spacer(Modifier.height(2.dp)) }
+        item { Spacer(Modifier.height(4.dp)) }
 
-        // CARD ODO XE
+        // ODO ĐẦU NGÀY / CUỐI NGÀY
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -1198,65 +1282,27 @@ fun TodayScreen(vm: MainViewModel) {
                 modifier = Modifier.border(1.dp, theme.cardBorder, RoundedCornerShape(16.dp))
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Surface(shape = RoundedCornerShape(6.dp), color = theme.accent.copy(alpha = 0.2f)) {
-                                Text(
-                                    text = "ODO",
-                                    color = theme.accent,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.5.sp,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                                Text("ODO", color = theme.accent, fontWeight = FontWeight.Bold, fontSize = 10.5.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                             }
-                            Text(
-                                text = "Đồng hồ ODO xe",
-                                color = theme.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Text("Đồng hồ ODO xe", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
-                        Text(
-                            text = "Lăn bánh: ${String.format("%.1f", actualDist)} km",
-                            color = theme.highlight1,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        Text("Lăn bánh: ${String.format("%.1f", actualDist)} km", color = theme.highlight1, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
 
                     Spacer(Modifier.height(10.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ThemedOdoBox(
-                            label = "ODO Đầu ca (km)",
-                            value = startInput,
-                            onValueChange = { startInput = it; vm.updateShift(vm.todayDate, it.toDoubleOrNull(), null, null) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        ThemedOdoBox(
-                            label = "ODO Cuối ca (km)",
-                            value = endInput,
-                            onValueChange = { endInput = it; vm.updateShift(vm.todayDate, null, it.toDoubleOrNull(), null) },
-                            modifier = Modifier.weight(1f)
-                        )
+                        ThemedOdoBox("ODO Đầu ngày (km)", startInput, { startInput = it; vm.updateShift(vm.todayDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
+                        ThemedOdoBox("ODO Cuối ngày (km)", endInput, { endInput = it; vm.updateShift(vm.todayDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
                     }
                 }
             }
         }
 
-        // BẢNG HIỆU QUẢ CA CHẠY
+        // BẢNG HIỆU QUẢ NGÀY CHẠY
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -1264,29 +1310,13 @@ fun TodayScreen(vm: MainViewModel) {
                 modifier = Modifier.border(1.dp, theme.cardBorder, RoundedCornerShape(16.dp))
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(theme.accent))
-                            Text(
-                                text = "BẢNG HIỆU QUẢ CA CHẠY",
-                                color = theme.textPrimary,
-                                fontWeight = FontWeight.Black,
-                                fontSize = 13.5.sp,
-                                maxLines = 1
-                            )
+                            Text("BẢNG HIỆU QUẢ NGÀY CHẠY", color = theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 13.5.sp)
                         }
                         Surface(shape = RoundedCornerShape(12.dp), color = theme.inputBg) {
-                            Text(
-                                text = "${trips.size} cuốc",
-                                color = theme.textSecondary,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                            Text("${trips.size} cuốc", color = theme.textSecondary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                         }
                     }
 
@@ -1304,56 +1334,23 @@ fun TodayScreen(vm: MainViewModel) {
 
                     Spacer(Modifier.height(12.dp))
 
-                    // THẺ KM CHẠY RỖNG
                     Card(
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = theme.warningBg),
                         modifier = Modifier.fillMaxWidth().border(1.dp, theme.warningBorder, RoundedCornerShape(12.dp))
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("🛵", fontSize = 22.sp)
                                 Column {
-                                    Text(
-                                        text = "Km chạy rỗng",
-                                        color = theme.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        text = "ODO - Km có khách",
-                                        color = theme.textSecondary,
-                                        fontSize = 11.sp,
-                                        maxLines = 1
-                                    )
+                                    Text("Km chạy rỗng", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Không chở khách", color = theme.textSecondary, fontSize = 11.sp)
                                 }
                             }
                             Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = "${String.format("%.1f", emptyDist)} km",
-                                    fontSize = 19.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = if (emptyDist > 15) theme.danger else theme.highlight1,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
+                                Text("${String.format("%.1f", emptyDist)} km", fontSize = 19.sp, fontWeight = FontWeight.Black, color = if (emptyDist > 15) theme.danger else theme.highlight1)
                                 if (emptyDist > 15) {
-                                    Text(
-                                        text = "Chạy rỗng nhiều!",
-                                        color = theme.danger,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
-                                    )
+                                    Text("Chạy rỗng nhiều!", color = theme.danger, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1362,56 +1359,33 @@ fun TodayScreen(vm: MainViewModel) {
             }
         }
 
-        // 2 NÚT QUÉT ẢNH & THÊM TAY
         item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    onClick = { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    modifier = Modifier.weight(1.4f).height(50.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
-                    enabled = !vm.isScanning
-                ) {
-                    if (vm.isScanning) {
-                        CircularProgressIndicator(color = theme.onAccent, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Đang quét...", color = theme.onAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    } else {
-                        Text("📸 QUÉT ẢNH ĐƠN", color = theme.onAccent, fontSize = 13.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
-                    }
-                }
-
-                Button(
-                    onClick = { editingTrip = null; showTripDialog = true },
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = theme.cardBg),
-                    border = BorderStroke(1.dp, theme.cardBorder)
-                ) {
-                    Text("+ Thêm tay", color = theme.highlight2, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+            Button(
+                onClick = { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
+                enabled = !vm.isScanning
+            ) {
+                if (vm.isScanning) {
+                    CircularProgressIndicator(color = theme.onAccent, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Đang quét...", color = theme.onAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    Text("📸 QUÉT ẢNH ĐƠN / MAPS", color = theme.onAccent, fontSize = 14.sp, fontWeight = FontWeight.Black)
                 }
             }
         }
 
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Danh sách đơn (chạm để sửa)",
-                    color = theme.textPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.5.sp,
-                    maxLines = 1
-                )
-                Text("${trips.size} đơn", color = theme.textSecondary, fontSize = 12.sp)
+                Text("Danh sách đơn hôm nay (${trips.size})", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                Text("Chạm để sửa", color = theme.textSecondary, fontSize = 11.5.sp)
             }
         }
 
         items(trips) { t ->
-            ThemedTripRow(
-                trip = t,
-                onClick = { editingTrip = t; showTripDialog = true },
-                onDelete = { vm.deleteTrip(t.id) }
-            )
+            ThemedTripRow(t, onClick = { editingTrip = t; showTripDialog = true }, onDelete = { vm.deleteTrip(t.id) })
         }
 
         item { Spacer(Modifier.height(16.dp)) }
@@ -1419,16 +1393,15 @@ fun TodayScreen(vm: MainViewModel) {
 }
 
 // ==========================================
-// TAB 2: THEO NGÀY & DOANH THU
+// TAB 1: THEO NGÀY (CHUYỂN NGÀY BẰNG 1 CHẠM)
 // ==========================================
 @Composable
-fun HistoryScreen(vm: MainViewModel) {
+fun DayScreen(vm: MainViewModel) {
     val theme = LocalAppTheme.current
     val selectedDate by vm.selectedDate.collectAsState()
     val trips by vm.currentTrips.collectAsState()
     val shift by vm.currentShift.collectAsState()
 
-    var dateInput by remember { mutableStateOf(selectedDate) }
     var revenueInput by remember { mutableStateOf("") }
     var startInput by remember { mutableStateOf("") }
     var endInput by remember { mutableStateOf("") }
@@ -1471,45 +1444,41 @@ fun HistoryScreen(vm: MainViewModel) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { Spacer(Modifier.height(2.dp)) }
+        item { Spacer(Modifier.height(4.dp)) }
 
+        // THANH ĐIỀU HƯỚNG NGÀY 1 CHẠM
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = theme.cardBg),
                 modifier = Modifier.border(1.dp, theme.cardBorder, RoundedCornerShape(16.dp))
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Chọn ngày xem dữ liệu (yyyy-MM-dd):", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = dateInput,
-                            onValueChange = { dateInput = it; vm.setDate(it) },
-                            singleLine = true,
-                            textStyle = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold, color = theme.textPrimary),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = theme.inputBg,
-                                unfocusedContainerColor = theme.inputBg,
-                                focusedBorderColor = theme.accent,
-                                unfocusedBorderColor = theme.cardBorder
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                        Button(
-                            onClick = { dateInput = vm.todayDate; vm.setDate(vm.todayDate) },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = theme.accent),
-                            modifier = Modifier.height(52.dp)
-                        ) {
-                            Text("Hôm nay", fontWeight = FontWeight.Bold, color = theme.onAccent, maxLines = 1, softWrap = false)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { vm.previousDay() }) {
+                        Text("◀", color = theme.accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(vm.getSelectedDayTitle(), color = theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                        if (vm.isTodaySelected()) {
+                            Text("(Hôm nay)", color = theme.highlight1, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Text("⟲ Về hôm nay", color = theme.accent, fontSize = 11.sp, modifier = Modifier.clickable { vm.goToToday() })
                         }
+                    }
+
+                    IconButton(onClick = { vm.nextDay() }) {
+                        Text("▶", color = theme.accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
 
+        // DOANH SỐ RÒNG & ODO NGÀY NÀY
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -1542,13 +1511,14 @@ fun HistoryScreen(vm: MainViewModel) {
                     Spacer(Modifier.height(10.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ThemedOdoBox("ODO Đầu (km)", startInput, { startInput = it; vm.updateShift(selectedDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
-                        ThemedOdoBox("ODO Cuối (km)", endInput, { endInput = it; vm.updateShift(selectedDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
+                        ThemedOdoBox("ODO Đầu ngày", startInput, { startInput = it; vm.updateShift(selectedDate, it.toDoubleOrNull(), null, null) }, Modifier.weight(1f))
+                        ThemedOdoBox("ODO Cuối ngày", endInput, { endInput = it; vm.updateShift(selectedDate, null, it.toDoubleOrNull(), null) }, Modifier.weight(1f))
                     }
                 }
             }
         }
 
+        // ĐƠN GIÁ / KM
         item {
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -1591,11 +1561,7 @@ fun HistoryScreen(vm: MainViewModel) {
         }
 
         items(trips) { t ->
-            ThemedTripRow(
-                trip = t,
-                onClick = { editingTrip = t; showTripDialog = true },
-                onDelete = { vm.deleteTrip(t.id) }
-            )
+            ThemedTripRow(t, onClick = { editingTrip = t; showTripDialog = true }, onDelete = { vm.deleteTrip(t.id) })
         }
 
         item { Spacer(Modifier.height(16.dp)) }
@@ -1603,61 +1569,160 @@ fun HistoryScreen(vm: MainViewModel) {
 }
 
 // ==========================================
-// TAB 3: TỔNG KẾT TUẦN & THÁNG
+// TAB 2: THEO TUẦN (TUẦN TRƯỚC / TUẦN KẾ TIẾP)
 // ==========================================
 @Composable
-fun PeriodReportScreen(vm: MainViewModel) {
+fun WeekScreen(vm: MainViewModel) {
     val theme = LocalAppTheme.current
-    val weekTrips by vm.weekTrips.collectAsState()
-    val weekShifts by vm.weekShifts.collectAsState()
+    val weekTrips by vm.selectedWeekTrips.collectAsState()
+    val weekShifts by vm.selectedWeekShifts.collectAsState()
 
-    val monthTrips by vm.monthTrips.collectAsState()
-    val monthShifts by vm.monthShifts.collectAsState()
+    val totalDist = weekTrips.sumOf { it.distanceKm }
+    val totalRev = weekShifts.sumOf { it.revenue }
+    val totalActualDist = weekShifts.sumOf { if (it.endOdo >= it.startOdo && it.startOdo > 0) it.endOdo - it.startOdo else 0.0 }
+    val totalEmptyDist = if (totalActualDist > totalDist) totalActualDist - totalDist else 0.0
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { Spacer(Modifier.height(2.dp)) }
+        item { Spacer(Modifier.height(4.dp)) }
+
+        // ĐIỀU HƯỚNG TUẦN
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = theme.cardBg),
+                modifier = Modifier.border(1.dp, theme.cardBorder, RoundedCornerShape(16.dp))
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { vm.previousWeek() }) {
+                        Text("◀", color = theme.accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(vm.getSelectedWeekTitle(), color = theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 14.5.sp)
+                        if (vm.isCurrentWeekSelected()) {
+                            Text("(Tuần hiện tại)", color = theme.highlight1, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Text("⟲ Về tuần này", color = theme.accent, fontSize = 11.sp, modifier = Modifier.clickable { vm.goToCurrentWeek() })
+                        }
+                    }
+
+                    IconButton(onClick = { vm.nextWeek() }) {
+                        Text("▶", color = theme.accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
 
         item {
-            val weekDistOrder = weekTrips.sumOf { it.distanceKm }
-            val weekRev = weekShifts.sumOf { it.revenue }
-            val weekActualDist = weekShifts.sumOf { if (it.endOdo >= it.startOdo && it.startOdo > 0) it.endOdo - it.startOdo else 0.0 }
-            val weekEmptyDist = if (weekActualDist > weekDistOrder) weekActualDist - weekDistOrder else 0.0
-
             PeriodSummaryCard(
-                title = "TỔNG KẾT TUẦN NÀY (Thứ 2 - CN)",
+                title = "TỔNG KẾT TUẦN",
                 tripCount = weekTrips.size,
-                revenue = weekRev,
-                orderDist = weekDistOrder,
-                actualDist = weekActualDist,
-                emptyDist = weekEmptyDist,
+                revenue = totalRev,
+                orderDist = totalDist,
+                actualDist = totalActualDist,
+                emptyDist = totalEmptyDist,
                 headerColor = theme.highlight2
             )
         }
 
         item {
-            val monthDistOrder = monthTrips.sumOf { it.distanceKm }
-            val monthRev = monthShifts.sumOf { it.revenue }
-            val monthActualDist = monthShifts.sumOf { if (it.endOdo >= it.startOdo && it.startOdo > 0) it.endOdo - it.startOdo else 0.0 }
-            val monthEmptyDist = if (monthActualDist > monthDistOrder) monthActualDist - monthDistOrder else 0.0
+            Text("Danh sách chuyến trong tuần (${weekTrips.size})", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+        }
 
-            PeriodSummaryCard(
-                title = "TỔNG KẾT THÁNG HIỆN TẠI",
-                tripCount = monthTrips.size,
-                revenue = monthRev,
-                orderDist = monthDistOrder,
-                actualDist = monthActualDist,
-                emptyDist = monthEmptyDist,
-                headerColor = theme.accent
-            )
+        items(weekTrips) { t ->
+            ThemedTripRow(t, onClick = {}, onDelete = { vm.deleteTrip(t.id) })
         }
 
         item { Spacer(Modifier.height(16.dp)) }
     }
 }
 
+// ==========================================
+// TAB 3: THEO THÁNG (THÁNG TRƯỚC / THÁNG TIẾP)
+// ==========================================
+@Composable
+fun MonthScreen(vm: MainViewModel) {
+    val theme = LocalAppTheme.current
+    val monthTrips by vm.selectedMonthTrips.collectAsState()
+    val monthShifts by vm.selectedMonthShifts.collectAsState()
+
+    val totalDist = monthTrips.sumOf { it.distanceKm }
+    val totalRev = monthShifts.sumOf { it.revenue }
+    val totalActualDist = monthShifts.sumOf { if (it.endOdo >= it.startOdo && it.startOdo > 0) it.endOdo - it.startOdo else 0.0 }
+    val totalEmptyDist = if (totalActualDist > totalDist) totalActualDist - totalDist else 0.0
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+
+        // ĐIỀU HƯỚNG THÁNG
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = theme.cardBg),
+                modifier = Modifier.border(1.dp, theme.cardBorder, RoundedCornerShape(16.dp))
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { vm.previousMonth() }) {
+                        Text("◀", color = theme.accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(vm.getSelectedMonthTitle(), color = theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 15.5.sp)
+                        if (vm.isCurrentMonthSelected()) {
+                            Text("(Tháng hiện tại)", color = theme.highlight1, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Text("⟲ Về tháng này", color = theme.accent, fontSize = 11.sp, modifier = Modifier.clickable { vm.goToCurrentMonth() })
+                        }
+                    }
+
+                    IconButton(onClick = { vm.nextMonth() }) {
+                        Text("▶", color = theme.accent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        item {
+            PeriodSummaryCard(
+                title = "TỔNG KẾT THÁNG",
+                tripCount = monthTrips.size,
+                revenue = totalRev,
+                orderDist = totalDist,
+                actualDist = totalActualDist,
+                emptyDist = totalEmptyDist,
+                headerColor = theme.accent
+            )
+        }
+
+        item {
+            Text("Danh sách chuyến trong tháng (${monthTrips.size})", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+        }
+
+        items(monthTrips) { t ->
+            ThemedTripRow(t, onClick = {}, onDelete = { vm.deleteTrip(t.id) })
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+// ==========================================
+// THÀNH PHẦN GIAO DIỆN PHỤ TRỢ
+// ==========================================
 @Composable
 fun PeriodSummaryCard(
     title: String,
@@ -1681,23 +1746,9 @@ fun PeriodSummaryCard(
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    color = headerColor,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
+                Text(title, color = headerColor, fontWeight = FontWeight.Black, fontSize = 13.5.sp)
                 Surface(shape = RoundedCornerShape(10.dp), color = theme.inputBg) {
-                    Text(
-                        text = "$tripCount cuốc",
-                        color = theme.textPrimary,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
+                    Text("$tripCount cuốc", color = theme.textPrimary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                 }
             }
 
@@ -1708,20 +1759,9 @@ fun PeriodSummaryCard(
                 colors = CardDefaults.cardColors(containerColor = theme.inputBg),
                 modifier = Modifier.fillMaxWidth().border(1.dp, theme.accent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Tổng Doanh Thu:", color = theme.textSecondary, fontSize = 12.5.sp, maxLines = 1)
-                    Text(
-                        text = "${formatter.format(revenue.toLong())} đ",
-                        color = theme.highlight1,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
-                        maxLines = 1,
-                        softWrap = false
-                    )
+                Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Tổng Doanh Thu:", color = theme.textSecondary, fontSize = 12.5.sp)
+                    Text("${formatter.format(revenue.toLong())} đ", color = theme.highlight1, fontSize = 18.sp, fontWeight = FontWeight.Black)
                 }
             }
 
@@ -1745,20 +1785,12 @@ fun PeriodSummaryCard(
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Tỷ lệ đón khách: $pickupRate%", color = theme.highlight1, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-                Text(
-                    text = "Km rỗng: ${String.format("%.1f", emptyDist)} km",
-                    color = if (emptyDist > 50) theme.danger else theme.textPrimary,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 13.5.sp,
-                    maxLines = 1,
-                    softWrap = false
-                )
+                Text("Km rỗng: ${String.format("%.1f", emptyDist)} km", color = if (emptyDist > 50) theme.danger else theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 13.5.sp)
             }
         }
     }
 }
 
-// HỘP THOẠI THÊM / SỬA CUỐC XE
 @Composable
 fun TripEditDialog(
     trip: TripEntity?,
@@ -1777,12 +1809,7 @@ fun TripEditDialog(
         onDismissRequest = onDismiss,
         containerColor = theme.cardBg,
         title = {
-            Text(
-                text = if (trip == null) "Thêm Cuốc Xe Mới" else "Sửa Thông Tin Cuốc",
-                color = theme.textPrimary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp
-            )
+            Text(if (trip == null) "Thêm Cuốc Xe Mới" else "Sửa Thông Tin Cuốc", color = theme.textPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1810,43 +1837,27 @@ fun TripEditDialog(
 
                 Text("Nguồn đơn:", color = theme.textSecondary, fontSize = 12.sp)
 
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        sources.take(2).forEach { s ->
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (srcInput == s) theme.accent else theme.inputBg,
-                                border = BorderStroke(1.dp, if (srcInput == s) theme.accent else theme.cardBorder),
-                                modifier = Modifier.weight(1f).clickable { srcInput = s }
-                            ) {
-                                Text(
-                                    text = s,
-                                    color = if (srcInput == s) theme.onAccent else theme.textPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                                )
-                            }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    sources.take(2).forEach { s ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (srcInput == s) theme.accent else theme.inputBg,
+                            border = BorderStroke(1.dp, if (srcInput == s) theme.accent else theme.cardBorder),
+                            modifier = Modifier.weight(1f).clickable { srcInput = s }
+                        ) {
+                            Text(s, color = if (srcInput == s) theme.onAccent else theme.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        sources.drop(2).forEach { s ->
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (srcInput == s) theme.accent else theme.inputBg,
-                                border = BorderStroke(1.dp, if (srcInput == s) theme.accent else theme.cardBorder),
-                                modifier = Modifier.weight(1f).clickable { srcInput = s }
-                            ) {
-                                Text(
-                                    text = s,
-                                    color = if (srcInput == s) theme.onAccent else theme.textPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                                )
-                            }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    sources.drop(2).forEach { s ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (srcInput == s) theme.accent else theme.inputBg,
+                            border = BorderStroke(1.dp, if (srcInput == s) theme.accent else theme.cardBorder),
+                            modifier = Modifier.weight(1f).clickable { srcInput = s }
+                        ) {
+                            Text(s, color = if (srcInput == s) theme.onAccent else theme.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
                         }
                     }
                 }
@@ -1874,21 +1885,11 @@ fun TripEditDialog(
     )
 }
 
-// ==========================================
-// THÀNH PHẦN UI ĐÃ TỐI ƯU CHỐNG TRÀN CHỮ
-// ==========================================
 @Composable
 fun ThemedOdoBox(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
     val theme = LocalAppTheme.current
     Column(modifier = modifier) {
-        Text(
-            text = label,
-            color = theme.textSecondary,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        Text(label, color = theme.textSecondary, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(4.dp))
         OutlinedTextField(
             value = value,
@@ -1896,11 +1897,7 @@ fun ThemedOdoBox(label: String, value: String, onValueChange: (String) -> Unit, 
             placeholder = { Text("0.0", color = theme.textSecondary.copy(alpha = 0.5f), fontSize = 14.sp) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            textStyle = TextStyle(
-                color = theme.textPrimary,
-                fontSize = 15.5.sp,
-                fontWeight = FontWeight.Black
-            ),
+            textStyle = TextStyle(color = theme.textPrimary, fontSize = 15.5.sp, fontWeight = FontWeight.Black),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = theme.inputBg,
                 unfocusedContainerColor = theme.inputBg,
@@ -1922,35 +1919,13 @@ fun ThemedStatBox(label: String, value: String, unit: String, valueColor: Color,
         modifier = modifier.border(1.dp, theme.cardBorder, RoundedCornerShape(12.dp))
     ) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
-            Text(
-                text = label,
-                color = theme.textSecondary,
-                fontSize = 11.sp,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis
-            )
+            Text(label, color = theme.textSecondary, fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = value,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Black,
-                    color = valueColor,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(value, fontSize = 17.sp, fontWeight = FontWeight.Black, color = valueColor, maxLines = 1, softWrap = false)
                 if (unit.isNotEmpty()) {
                     Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = unit,
-                        color = theme.textSecondary,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.padding(bottom = 1.dp)
-                    )
+                    Text(unit, color = theme.textSecondary, fontSize = 11.sp, modifier = Modifier.padding(bottom = 1.dp))
                 }
             }
         }
@@ -1978,59 +1953,27 @@ fun ThemedTripRow(trip: TripEntity, onClick: () -> Unit, onDelete: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "${trip.distanceKm} km",
-                        color = theme.textPrimary,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 16.sp,
-                        maxLines = 1,
-                        softWrap = false
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("${trip.distanceKm} km", color = theme.textPrimary, fontWeight = FontWeight.Black, fontSize = 16.sp)
                     Text("•", color = theme.textSecondary)
-                    Text(
-                        text = "${trip.durationMinutes} phút",
-                        color = theme.textSecondary,
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        softWrap = false
-                    )
+                    Text("${trip.durationMinutes} phút", color = theme.textSecondary, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
                 }
                 Spacer(Modifier.height(4.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = if (isMaps) theme.highlight2.copy(alpha = 0.15f) else theme.accent.copy(alpha = 0.15f)
                     ) {
-                        Text(
-                            text = trip.source,
-                            color = if (isMaps) theme.highlight2 else theme.accent,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                        Text(trip.source, color = if (isMaps) theme.highlight2 else theme.accent, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                     }
-                    Text(
-                        text = trip.date,
-                        color = theme.textSecondary,
-                        fontSize = 11.5.sp,
-                        maxLines = 1
-                    )
+                    Text(trip.date, color = theme.textSecondary, fontSize = 11.5.sp)
                 }
             }
             TextButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.textButtonColors(contentColor = theme.danger)
             ) {
-                Text("Xóa", fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
+                Text("Xóa", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
         }
     }
